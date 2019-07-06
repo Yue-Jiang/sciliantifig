@@ -1,0 +1,317 @@
+---
+title: 'sci-lianti figures: DNA-RNA coassay (Figure 3)'
+author: "Yue"
+date: "3/10/2019"
+output: html_document
+---
+
+The DNA-RNA coassay figure has its separate Rmd because it takes some time to run, especially the Seurat steps.
+
+```{r setup, include=FALSE}
+# set working directory to where this file lives, double check if it makes sense to you
+# setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+knitr::opts_chunk$set(echo=TRUE, message=FALSE, warning=FALSE, fig.width=3, fig.height=2.7)
+require(sciliantifig)
+require(dplyr)
+require(tidyr)
+require(purrr)
+require(ggplot2)
+require(Seurat)
+
+fig_dir <- "output_190307"
+# fig_dir <- NA # to skip writing figures to file
+```
+
+```{r}
+if (!is.na(fig_dir)) system(sprintf("mkdir -p %s", fig_dir))
+```
+
+# Load data and minor processing
+
+There are two separate libraries, yi244 and yi257, each sequenced at high and low depths. `d(r)na_df` are summary stats tables for each cell.
+
+yi244_q10_save.rda contains the following items:
+
+- use_lo_dna_df
+- use_lo_rna_df
+- use_hi_dna_df
+- use_hi_rna_df
+- use_lo_hek_df
+- use_lo_bj_df
+- use_hi_hek_df
+- use_hi_bj_df
+
+yi257_q10_save.rda contains the following items:
+
+- yi257_use_lo_dna_df
+- yi257_use_lo_rna_df
+- yi257_use_hi_dna_df
+- yi257_use_hi_rna_df
+- yi257_use_lo_hek_df
+- yi257_use_lo_bj_df
+- yi257_use_hi_hek_df
+- yi257_use_hi_bj_df
+
+In addition, we also have cell $\times$ gene count matrix for RNA. For the two libraries we have `yi244_joint_rna_mtx_q10.rds` and `yi257_joint_rna_mtx_q10.rds`.
+
+## Load stuff
+
+```{r}
+load(slfile("coassay/yi244_q10_save.rda"))
+load(slfile("coassay/yi257_q10_save.rda"))
+yi244_joint_rna_count <- readRDS(slfile("coassay/yi244_joint_rna_mtx_q10.rds"))
+yi257_joint_rna_count <- readRDS(slfile("coassay/yi257_joint_rna_mtx_q10.rds"))
+```
+
+## Combine libraries
+
+```{r}
+yi244_yi257_use_hi_bj_df <- bind_rows(use_hi_bj_df, yi257_use_hi_bj_df)
+yi244_yi257_use_hi_hek_df <- bind_rows(use_hi_hek_df, yi257_use_hi_hek_df)
+yi244_yi257_use_lo_bj_df <- bind_rows(use_lo_bj_df, yi257_use_lo_bj_df)
+yi244_yi257_use_lo_hek_df <- bind_rows(use_lo_hek_df, yi257_use_lo_hek_df)
+
+yi244_yi257_use_hi_dna_df <- bind_rows(use_hi_dna_df, yi257_use_hi_dna_df)
+yi244_yi257_use_hi_rna_df <- bind_rows(use_hi_rna_df, yi257_use_hi_rna_df)
+yi244_yi257_use_lo_dna_df <- bind_rows(use_lo_dna_df, yi257_use_lo_dna_df)
+yi244_yi257_use_lo_rna_df <- bind_rows(use_lo_rna_df, yi257_use_lo_rna_df)
+```
+
+## Summary stats
+
+```{r, fig.width=6, fig.height=6}
+yi244_yi257_use_lo_dna_df$dna_genome_hm_r1s %>% median()
+yi244_yi257_use_lo_rna_df$rna_gene_hm_umis %>% median()
+yi244_yi257_use_hi_dna_df$dna_genome_hm_r1s %>% median()
+yi244_yi257_use_hi_rna_df$rna_gene_hm_umis %>% median()
+
+yi244_yi257_use_lo_dna_df$dna_genome_hm_r1s %>% mean()
+yi244_yi257_use_lo_rna_df$rna_gene_hm_umis %>% mean()
+yi244_yi257_use_hi_dna_df$dna_genome_hm_r1s %>% mean()
+yi244_yi257_use_hi_rna_df$rna_gene_hm_umis %>% mean()
+
+yi244_yi257_use_lo_rna_df$rna_complexity %>% median()
+yi244_yi257_use_hi_rna_df$rna_complexity %>% median()
+
+# collision
+dna_collision <- function(df) {
+  p <- ggplot(df, aes(dna_genome_h_r1s, dna_genome_m_r1s)) +
+    geom_point(aes(color=hm), alpha=0.7) +
+    scale_color_manual("", values=c("Human"="orangered", "Mouse"="dodgerblue", "Others"="grey90")) +
+    theme_bw()
+  ret <- list("collision_rate"=mean(df$hm == "Others"),
+              "plot"=p)
+  ret
+}
+
+rna_collision <- function(df) {
+  p <- ggplot(df, aes(rna_gene_h_umis, rna_gene_m_umis)) +
+    geom_point(aes(color=hm), alpha=0.7) +
+    scale_color_manual("", values=c("Human"="orangered", "Mouse"="dodgerblue", "Others"="grey90")) +
+    theme_bw()
+  ret <- list("collision_rate"=mean(df$hm == "Others"),
+              "plot"=p)
+  ret
+}
+
+dna_collision(yi244_yi257_use_lo_dna_df)
+dna_collision(yi244_yi257_use_hi_dna_df)
+rna_collision(yi244_yi257_use_lo_rna_df)
+rna_collision(yi244_yi257_use_hi_rna_df)
+
+dna_collision(bind_rows(yi244_yi257_use_lo_dna_df, yi244_yi257_use_hi_dna_df))
+rna_collision(bind_rows(yi244_yi257_use_lo_rna_df, yi244_yi257_use_hi_rna_df))
+
+# purity
+purity <- function(df) {
+  df %>%
+    group_by(hm) %>%
+    summarise(PURITY=mean(h_rate)) %>%
+    mutate(PURITY=case_when(hm == "Mouse" ~ 1 - PURITY,
+                            TRUE ~ PURITY))
+}
+purity(yi244_yi257_use_lo_dna_df)
+purity(yi244_yi257_use_lo_rna_df)
+purity(yi244_yi257_use_hi_dna_df)
+purity(yi244_yi257_use_hi_rna_df)
+
+purity(bind_rows(yi244_yi257_use_lo_dna_df, yi244_yi257_use_hi_dna_df))
+purity(bind_rows(yi244_yi257_use_lo_rna_df, yi244_yi257_use_hi_rna_df))
+```
+
+# Fig 3C
+
+```{r, fig.width=6, fig.height=6}
+p <- yi244_yi257_use_hi_dna_df %>%
+  bind_rows(yi244_yi257_use_lo_dna_df) %>%
+  mutate(hm=case_when(hm == "Others" ~ "Collision",
+                      TRUE ~ hm)) %>%
+  mutate(hm=factor(hm, levels=c("Human", "Mouse", "Collision"))) %>%
+  arrange(desc(hm)) %>%
+  mutate(hm=factor(hm, levels=c("Human", "Collision", "Mouse"))) %>%
+  ggplot(aes(dna_genome_h_r1s, dna_genome_m_r1s)) +
+  geom_point(aes(color=hm), alpha=0.7) +
+  scale_color_manual("", values=c("Human"="orangered", "Mouse"="dodgerblue", "Collision"="grey90")) +
+  scale_x_continuous(labels=scales::format_format(scientific = FALSE),
+                     breaks=scales::pretty_breaks(n=5)) +
+  scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                     breaks=scales::pretty_breaks(n=5)) +
+  xlab("# of Human Unique Insertions") +
+  ylab("# of Mouse Unique Insertions") +
+  theme_classic() +
+  theme(legend.title=element_blank(),
+        legend.justification=c(1, 1),
+        legend.position=c(0.95, 0.95),
+        legend.background=element_rect(colour="black", size=0.5),
+        axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+p
+ggsave("fig3C.pdf", p, "pdf", fig_dir, height=2.5, width=3)
+```
+
+# Fig 3D
+
+```{r, fig.width=6, fig.height=6}
+p <- yi244_yi257_use_hi_rna_df %>%
+  bind_rows(yi244_yi257_use_lo_rna_df) %>%
+  mutate(hm=case_when(hm == "Others" ~ "Collision",
+                      TRUE ~ hm)) %>%
+  mutate(hm=factor(hm, levels=c("Human", "Mouse", "Collision"))) %>%
+  arrange(desc(hm)) %>%
+  mutate(hm=factor(hm, levels=c("Human", "Collision", "Mouse"))) %>%
+  ggplot(aes(rna_gene_h_umis, rna_gene_m_umis)) +
+  geom_point(aes(color=hm), alpha=0.3) +
+  scale_color_manual("", values=c("Human"="orangered", "Collision"="grey90", "Mouse"="dodgerblue")) +
+  scale_x_continuous(labels=scales::format_format(scientific = FALSE),
+                     breaks=scales::pretty_breaks(n=5), limits = c(0, 2550)) +
+  scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                     breaks=scales::pretty_breaks(n=5)) +
+  xlab("# of Human Unique Reads") +
+  ylab("# of Mouse Unique Reads") +
+  theme_classic() +
+  theme(legend.title=element_blank(),
+        legend.justification=c(1, 1),
+        legend.position=c(0.95, 0.95),
+        legend.background=element_rect(colour="black", size=0.5),
+        axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+p
+ggsave("fig3D.pdf", p, "pdf", fig_dir, height=2.5, width=2.7)
+```
+
+# Human cell clustering
+
+Merge RNA count tables of human cells (BJ mixed with HEK) and prepare for Seurat clustering.
+
+```{r}
+yi244_hek_bj_count <- yi244_joint_rna_count[colnames(yi244_joint_rna_count) %in% c(
+  "GENE",
+  use_lo_hek_df$CELL_RNA, use_hi_hek_df$CELL_RNA, use_lo_bj_df$CELL_RNA, use_hi_bj_df$CELL_RNA
+)]
+colnames(yi244_hek_bj_count)[2:ncol(yi244_hek_bj_count)] <- paste0(colnames(yi244_hek_bj_count)[2:ncol(yi244_hek_bj_count)], "yi244")
+
+yi257_hek_bj_count <- yi257_joint_rna_count[colnames(yi257_joint_rna_count) %in% c(
+  "GENE",
+  yi257_use_lo_hek_df$CELL_RNA, yi257_use_hi_hek_df$CELL_RNA, yi257_use_lo_bj_df$CELL_RNA, yi257_use_hi_bj_df$CELL_RNA
+)]
+colnames(yi257_hek_bj_count)[2:ncol(yi257_hek_bj_count)] <- paste0(colnames(yi257_hek_bj_count)[2:ncol(yi257_hek_bj_count)], "yi257")
+
+yi244_yi257_hek_bj_count <- full_join(yi244_hek_bj_count, yi257_hek_bj_count, by="GENE")
+mtx <- as.matrix(yi244_yi257_hek_bj_count[, -1])
+mtx[is.na(mtx)] <- 0
+rownames(mtx) <- yi244_yi257_hek_bj_count$GENE
+h_gene_idx <- which(yi244_yi257_hek_bj_count$GENE == toupper(yi244_yi257_hek_bj_count$GENE))
+h_mtx <- mtx[h_gene_idx, ]
+smtx <- Matrix(h_mtx, sparse=TRUE)
+```
+
+## Default Seurat workflow
+
+```{r}
+seu <- CreateSeuratObject(raw.data = smtx, min.cells = 2, min.genes = 50, project = "coassay")
+mito.genes <- grep(pattern = "^MT-", x = rownames(x = seu@data), value = TRUE)
+percent.mito <- Matrix::colSums(seu@raw.data[mito.genes, ])/Matrix::colSums(seu@raw.data)
+seu <- AddMetaData(object = seu, metadata = percent.mito, col.name = "percent.mito")
+
+# VlnPlot(object = seu, features.plot = c("nGene", "nUMI", "percent.mito"), nCol = 3)
+# GenePlot(object = seu, gene1 = "nUMI", gene2 = "percent.mito")
+# GenePlot(object = seu, gene1 = "nUMI", gene2 = "nGene")
+
+seu <- NormalizeData(object = seu, normalization.method = "LogNormalize", 
+    scale.factor = 10000)
+seu <- FindVariableGenes(object = seu, mean.function = ExpMean, dispersion.function = LogVMR, 
+    x.low.cutoff = 0.0125, x.high.cutoff = 3, y.cutoff = 0.5)
+
+# length(x = seu@var.genes)
+
+seu <- ScaleData(object = seu, vars.to.regress = c("nUMI", "percent.mito"))
+seu <- RunPCA(object = seu, pc.genes = seu@var.genes, do.print = TRUE, pcs.print = 1:5, 
+    genes.print = 5)
+
+# PCAPlot(object = seu, dim.1 = 1, dim.2 = 2)
+# PCHeatmap(object = seu, pc.use = 1:12, do.balanced = TRUE, label.columns = FALSE, use.full = FALSE)
+
+seu <- JackStraw(object = seu, num.replicate = 100, display.progress = FALSE)
+
+# JackStrawPlot(object = seu, PCs = 1:12)
+# PCElbowPlot(object = seu)
+
+seu <- FindClusters(object = seu, reduction.type = "pca", dims.use = 1:10, 
+    resolution = 0.6, print.output = 0, save.SNN = TRUE)
+
+# PrintFindClustersParams(object = seu)
+
+seu <- RunTSNE(object = seu, dims.use = 1:10, do.fast = F)
+
+# TSNEPlot(object = seu)
+# PCAPlot(object=seu)
+
+seu_df <- seu@dr$tsne@cell.embeddings %>%
+  as.data.frame() %>%
+  rownames_to_column("CELL") %>%
+  left_join(GetClusters(seu), by=c("CELL"="cell.name")) %>%
+  mutate(TYPE=case_when(CELL %in% c(paste0(use_lo_hek_df$CELL_RNA, "yi244"),
+                                    paste0(use_hi_hek_df$CELL_RNA, "yi244")) ~ "HEK_244",
+                        CELL %in% c(paste0(yi257_use_lo_hek_df$CELL_RNA, "yi257"),
+                                    paste0(yi257_use_hi_hek_df$CELL_RNA, "yi257")) ~ "HEK_257",
+                        CELL %in% c(paste0(use_lo_bj_df$CELL_RNA, "yi244"),
+                                    paste0(use_hi_bj_df$CELL_RNA, "yi244")) ~ "BJ_244",
+                        CELL %in% c(paste0(yi257_use_lo_bj_df$CELL_RNA, "yi257"),
+                                    paste0(yi257_use_hi_bj_df$CELL_RNA, "yi257")) ~ "BJ_257",
+                        TRUE ~ "Others"))
+
+dplyr::count(seu_df, gsub("_.*", "", TYPE), cluster)
+```
+
+## Fig 3E
+
+```{r, fig.width=6, fig.height=6}
+p <- seu_df %>%
+  mutate(TYPE2=case_when(grepl("BJ", TYPE) ~ "BJ-5ta",
+                         grepl("HEK", TYPE) ~ "HEK293T")) %>%
+  ggplot(aes(tSNE_1, tSNE_2)) +
+  geom_point(aes(color=TYPE2), alpha=0.7) +
+  scale_color_manual("", values=c("BJ-5ta"="chartreuse3", "HEK293T"="blueviolet")) +
+  xlab("t-SNE 1") +
+  ylab("t-SNE 2") +
+  theme_classic() +
+  theme(legend.title=element_blank(),
+        legend.justification=c(0, 0),
+        legend.position=c(0.06, 0.06),
+        legend.background=element_rect(colour="black", size=0.5),
+        axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+p
+ggsave("fig3E.pdf", p, "pdf", fig_dir, height=3.8, width=4)
+```
+

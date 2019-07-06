@@ -1,0 +1,1970 @@
+---
+title: "sci-lianti figures"
+author: "Yue and Yi"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+# set working directory to where this file lives, double check if it makes sense to you
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+
+knitr::opts_chunk$set(echo=TRUE, message=FALSE, warning=FALSE, fig.width=3, fig.height=2.7)
+require(sciliantifig)
+require(karyoploteR)
+require(ggrepel)
+require(gridExtra)
+require(scales)
+require(BAS)
+require(corrplot)
+require(tidyverse)
+
+# devtools::install_local("~/Desktop/sciliantifig", force=TRUE)
+chr_levels <- c("chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9", "chr10",
+                "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17", "chr18", "chr19", "chrX", "chrY")
+
+fig_dir <- "output"
+# fig_dir <- NA # to skip writing figures to file
+```
+
+```{r}
+if (!is.na(fig_dir)) system(sprintf("mkdir -p %s", fig_dir))
+```
+
+# Barcode collision 
+
+```{r}
+plot_collision <- function(df) {
+  xmax <- max(df$HUMAN_READS * 1.1)
+  ymax <- max(df$MOUSE_READS * 1.1)
+  df %>%
+  mutate(CELL=case_when(HUMAN_PERCENT >= 0.9 ~ "Human",
+                        MOUSE_PERCENT >= 0.9 ~ "Mouse",
+                        TRUE ~ "Collision")) %>%
+    mutate(CELL=factor(CELL, levels=c("Human", "Collision", "Mouse"))) %>%
+    ggplot(aes(HUMAN_READS, MOUSE_READS, color=CELL)) +
+    geom_point(alpha=0.3) +
+    xlab("# of human unique insertions") +
+    ylab("# of mouse unique insertions") +
+    scale_color_manual(values=c("Human"="orangered", "Mouse"="dodgerblue", "Collision"="grey80")) +
+    scale_x_continuous(labels=scales::format_format(scientific = FALSE),
+                       breaks=scales::pretty_breaks(n=4)) +
+    scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                       breaks=scales::pretty_breaks(n=4)) +
+    coord_cartesian(xlim=c(0, xmax), ylim=c(0, ymax)) +
+    theme_bw() +
+    theme(legend.title=element_blank(),
+          legend.justification=c(1, 1),
+          legend.position=c(0.95, 0.95),
+          legend.background=element_rect(colour="black", size=0.5),
+          axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank())
+}
+```
+
+## Fig 1C
+
+```{r}
+df <- read_delim(slfile("lib1-6forCollision.txt"), col_names=c("CELL_ID", "HUMAN_READS", "MOUSE_READS", "TOTAL_READS", "HUMAN_PERCENT", "MOUSE_PERCENT"), delim=" ")
+
+# df %>%
+#   mutate(CELL=case_when(HUMAN_PERCENT >= 0.9 ~ "Human",
+#                         MOUSE_PERCENT >= 0.9 ~ "Mouse",
+#                         TRUE ~ "Collision")) %>%
+#   mutate(CELL=factor(CELL, levels=c("Human", "Collision", "Mouse"))) %>%
+#   count(CELL)
+
+p <- plot_collision(df)
+p
+if (!is.na(fig_dir)) ggsave("fig1C.pdf", p, "pdf", fig_dir, height=2.5, width=3)
+```
+
+# Number of unique reads
+
+```{r}
+human_mouse_boxplot <- function(human_df, mouse_df) {
+  bind_rows(human_df %>% mutate(CELL="Human"),
+            mouse_df %>% mutate(CELL="Mouse")) %>%
+    filter(TN5_TYPE == "Concentrated") %>%
+    ggplot(aes(CELL, N_UNIQ_READS, fill=CELL)) +
+    geom_boxplot(outlier.colour="grey50", outlier.alpha=0.5) +
+    scale_fill_manual(values=c("Human"="orangered", "Mouse"="dodgerblue")) +
+    xlab("") +
+    ylab("# of unique insertions") +
+    theme_bw() +
+    scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                       breaks=scales::pretty_breaks(n=4)) +
+    theme(legend.position='none',
+          axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank())
+}
+
+unique_reads_boxplot <- function(df) {
+  df %>%
+    ggplot(aes(TN5_TYPE, N_UNIQ_READS, fill=TN5_TYPE)) +
+    geom_boxplot(outlier.colour="grey50", outlier.alpha=0.5) +
+    scale_fill_manual(values=c("Concentrated"="orangered", "Diluted"="dodgerblue")) +
+    xlab("Transposon concentration") +
+    ylab("# of human unique insertions") +
+    theme_bw() +
+    scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                       breaks=scales::pretty_breaks(n=4)) +
+    theme(legend.position='none',
+          axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank())
+}
+```
+
+## Fig 1D
+
+```{r}
+yi129_h_m_df <- read_delim(slfile("yi129_single_cell_summary_all.txt"), col_names=c("CELL_ID", "HUMAN_READS", "MOUSE_READS", "TOTAL_READS", "HUMAN_PERCENT", "MOUSE_PERCENT"), delim=" ")
+
+yi129_human_df <- read_delim(slfile("yi129_single_cell_summary_bed.txt"), col_names=c("CELL_ID", "x", "y", "z"), delim=" ") %>%
+  mutate(N_UNIQ_READS=y * 2) %>%
+  filter(CELL_ID %in% yi129_h_m_df$CELL_ID[yi129_h_m_df$HUMAN_PERCENT >= 0.9]) %>%
+  separate(CELL_ID, c("LIB", "BC"), sep="_", remove=FALSE) %>%
+  separate(BC, c("SSS", "ELSE"), sep="\\.") %>%
+  separate(ELSE, c("TN5", "LIGATION"), sep=8) %>%
+  mutate(TN5_TYPE=case_when(TN5 %in% c("CATCAAGG", "TCCTTGTG") ~ "Diluted",
+                            TN5 %in% c("CCGCGCTT", "GTTACGCG", "TCTTAGTG") ~ "Concentrated"))
+
+yi129_mouse_df <- read_delim(slfile("yi129_single_cell_summary_mouse_bed.txt"), col_names=c("CELL_ID", "x", "y", "z"), delim=" ") %>%
+  mutate(N_UNIQ_READS=y * 2) %>% # because paired reads and this is only R1
+  filter(CELL_ID %in% yi129_h_m_df$CELL_ID[yi129_h_m_df$MOUSE_PERCENT >= 0.9]) %>%
+  separate(CELL_ID, c("LIB", "BC"), sep="_", remove=FALSE) %>%
+  separate(BC, c("SSS", "ELSE"), sep="\\.") %>%
+  separate(ELSE, c("TN5", "LIGATION"), sep=8) %>%
+  mutate(TN5_TYPE=case_when(TN5 %in% c("CATCAAGG", "TCCTTGTG") ~ "Diluted",
+                            TN5 %in% c("CCGCGCTT", "GTTACGCG", "TCTTAGTG") ~ "Concentrated"))
+
+p <- human_mouse_boxplot(yi129_human_df, yi129_mouse_df)
+p
+if (!is.na(fig_dir)) ggsave("fig1D.pdf", p, "pdf", fig_dir, height=2.5, width=2.5)
+```
+
+## Fig S3A
+
+```{r}
+yi128_h_m_df <- read_delim(slfile("yi128_single_cell_summary_all.txt"),
+  col_names=c("CELL_ID", "HUMAN_READS", "MOUSE_READS", "TOTAL_READS", "HUMAN_PERCENT", "MOUSE_PERCENT"),
+  delim=" ")
+
+yi128_human_df <- read_delim(slfile("yi128_single_cell_summary_bed.txt"),
+  col_names=c("CELL_ID", "x", "y", "z"), delim=" ") %>%
+  mutate(N_UNIQ_READS=y * 2) %>%
+  filter(CELL_ID %in% yi128_h_m_df$CELL_ID[yi128_h_m_df$HUMAN_PERCENT >= 0.9]) %>%
+  separate(CELL_ID, c("LIB", "BC"), sep="_", remove=FALSE) %>%
+  separate(BC, c("SSS", "ELSE"), sep="\\.") %>%
+  separate(ELSE, c("TN5", "LIGATION"), sep=8) %>%
+  mutate(TN5_TYPE=case_when(TN5 %in% c("CATCAAGG", "TCCTTGTG") ~ "Diluted",
+                            TN5 %in% c("CCGCGCTT", "GTTACGCG", "TCTTAGTG") ~ "Concentrated"))
+
+yi128_mouse_df <- read_delim(slfile("yi128_single_cell_summary_mouse_bed.txt"),
+  col_names=c("CELL_ID", "x", "y", "z"), delim=" ") %>%
+  mutate(N_UNIQ_READS=y * 2) %>%
+  filter(CELL_ID %in% yi128_h_m_df$CELL_ID[yi128_h_m_df$MOUSE_PERCENT >= 0.9]) %>%
+  separate(CELL_ID, c("LIB", "BC"), sep="_", remove=FALSE) %>%
+  separate(BC, c("SSS", "ELSE"), sep="\\.") %>%
+  separate(ELSE, c("TN5", "LIGATION"), sep=8) %>%
+  mutate(TN5_TYPE=case_when(TN5 %in% c("CATCAAGG", "TCCTTGTG") ~ "Diluted",
+                            TN5 %in% c("CCGCGCTT", "GTTACGCG", "TCTTAGTG") ~ "Concentrated"))
+
+p <- human_mouse_boxplot(yi128_human_df, yi128_mouse_df)
+p
+if (!is.na(fig_dir)) ggsave("figS3A1.pdf", p, "pdf", fig_dir, height=2.5, width=2.5)
+
+p <- unique_reads_boxplot(yi128_human_df)
+p
+if (!is.na(fig_dir)) ggsave("figS3A2.pdf", p, "pdf", fig_dir, height=2.5, width=2.5)
+```
+
+## Fig S3B
+
+```{r}
+p <- unique_reads_boxplot(yi129_human_df)
+p
+if (!is.na(fig_dir)) ggsave("figS3B.pdf", p, "pdf", fig_dir, height=2.5, width=2.5)
+```
+
+## Fig S3C
+
+```{r, fig.width=4}
+df_140 <- read_delim(slfile("yi140_GAACCG.single_cells_all.txt"), col_names=FALSE, delim=" ")
+df_141 <- read_delim(slfile("yi141_AGGATG.single_cells_all.txt"), col_names=FALSE, delim=" ")
+df_144 <- read_delim(slfile("yi144_single_cell_summary_all.txt"), col_names=FALSE, delim=" ")
+df_145 <- read_delim(slfile("yi145_single_cell_summary_all.txt"), col_names=FALSE, delim=" ")
+
+df <- bind_rows(
+  bind_rows(df_140 %>% mutate(LIB="yi140, 141"),
+            df_141 %>% mutate(LIB="yi140, 141")) %>%
+    top_n(191, X4),
+  bind_rows(df_144 %>% mutate(LIB="yi144, 145"),
+            df_145 %>% mutate(LIB="yi144, 145")) %>%
+    top_n(2200, X4)
+)
+  
+p1 <- df %>%
+  filter(LIB == "yi140, 141") %>%
+  ggplot(aes(LIB, X4 * 2)) +
+  geom_boxplot(outlier.colour="grey50", outlier.alpha=0.5, fill="orangered") +
+  xlab("") +
+  ylab("# of unique insertions") +
+  theme_bw() +
+  scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                     breaks=scales::pretty_breaks(n=4)) +
+  theme(legend.position='none',
+        axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+p2 <- df %>%
+  filter(LIB == "yi144, 145") %>%
+  ggplot(aes(LIB, X4 * 2)) +
+  geom_boxplot(outlier.colour="grey50", outlier.alpha=0.5, fill="dodgerblue") +
+  xlab("") +
+  ylab("# of unique insertions") +
+  theme_bw() +
+  scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                     breaks=scales::pretty_breaks(n=4)) +
+  theme(legend.position='none',
+        axis.line = element_line(colour = "black"),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(),
+        panel.background = element_blank())
+
+grid.arrange(p1, p2, nrow=1)
+if (!is.na(fig_dir)) {
+  ggsave("figS3C.pdf", p1, "pdf", fig_dir, height=2.5, width=2)
+  ggsave("figS3D.pdf", p2, "pdf", fig_dir, height=2.5, width=2)
+}
+```
+
+## Fig S3E
+
+```{r}
+yi174_h_df <- read_delim(slfile("yi174.human.txt"), col_names=c("CELL_ID", "HUMAN_READS", "MOUSE_READS", "TOTAL_READS", "HUMAN_PERCENT", "MOUSE_PERCENT"), delim=" ")
+
+cols <- c("CELL_ID", "x", "UNIQ_READS", "DEPTH", "z")
+yi174_human_df <- bind_rows(
+  read_delim(slfile("yi174_ACCACT.single_cells_all.txt"), col_names=cols, delim=" "),
+  read_delim(slfile("yi174_AGGATG.single_cells_all.txt"), col_names=cols, delim=" "),
+  read_delim(slfile("yi174_CGCTTG.single_cells_all.txt"), col_names=cols, delim=" "),
+  read_delim(slfile("yi174_GTCCTA.single_cells_all.txt"), col_names=cols, delim=" "),
+  read_delim(slfile("yi174_TTCTCC.single_cells_all.txt"), col_names=cols, delim=" "),
+  read_delim(slfile("yi174_TTTCGC.single_cells_all.txt"), col_names=cols, delim=" ")
+) %>%
+  mutate(N_UNIQ_READS=UNIQ_READS * 2) %>%
+  filter(CELL_ID %in% yi174_h_df$CELL_ID[yi174_h_df$HUMAN_PERCENT >= 0.9]) %>%
+  tidyr::extract(CELL_ID, c("TN5"), ".*\\.(........).*", remove=FALSE) %>%
+  mutate(TN5_TYPE=case_when(TN5 %in% c("TGATATTG", "GATCCCGT", "CTCGATTA") ~ "Concentrated",
+                            TRUE ~ "Diluted"))
+
+yi174_m_df <- bind_rows(
+  read_tsv(slfile("yi174_ACCACT.mouse.txt"), col_names=c("CELL_ID")),
+  read_tsv(slfile("yi174_AGGATG.mouse.txt"), col_names=c("CELL_ID")),
+  read_tsv(slfile("yi174_CGCTTG.mouse.txt"), col_names=c("CELL_ID")),
+  read_tsv(slfile("yi174_GTCCTA.mouse.txt"), col_names=c("CELL_ID")),
+  read_tsv(slfile("yi174_TTCTCC.mouse.txt"), col_names=c("CELL_ID")),
+  read_tsv(slfile("yi174_TTTCGC.mouse.txt"), col_names=c("CELL_ID"))
+)
+
+cols <- c("CELL_ID", "x", "UNIQ_READS", "z")
+
+yi174_mouse_df <- bind_rows(
+  read_delim(slfile("yi174_ACCACT.mouse.single_cells_bed.txt"), col_names=cols, delim=" "),
+  read_delim(slfile("yi174_AGGATG.mouse.single_cells_bed.txt"), col_names=cols, delim=" "),
+  read_delim(slfile("yi174_CGCTTG.mouse.single_cells_bed.txt"), col_names=cols, delim=" "),
+  read_delim(slfile("yi174_GTCCTA.mouse.single_cells_bed.txt"), col_names=cols, delim=" "),
+  read_delim(slfile("yi174_TTCTCC.mouse.single_cells_bed.txt"), col_names=cols, delim=" "),
+  read_delim(slfile("yi174_TTTCGC.mouse.single_cells_bed.txt"), col_names=cols, delim=" ")
+) %>%
+  mutate(N_UNIQ_READS=UNIQ_READS * 2) %>%
+  filter(CELL_ID %in% yi174_m_df$CELL_ID) %>%
+  tidyr::extract(CELL_ID, c("TN5"), ".*\\.(........).*", remove=FALSE) %>%
+  mutate(TN5_TYPE=case_when(TN5 %in% c("TGATATTG", "GATCCCGT", "CTCGATTA") ~ "Concentrated",
+                            TRUE ~ "Diluted"))
+
+p <- unique_reads_boxplot(yi174_human_df)
+p
+if (!is.na(fig_dir)) ggsave("figS3E1.pdf", p, "pdf", fig_dir, height=2.5, width=2.5)
+p <- human_mouse_boxplot(yi174_human_df, yi174_mouse_df)
+p
+if (!is.na(fig_dir)) ggsave("figS3E2.pdf", p, "pdf", fig_dir, height=2.5, width=2.5)
+```
+
+## Fig S3F
+
+```{r, fig.width=5, fig.height=3}
+depth_beds <- list.files(slfile("read_depth"), full.names=TRUE)
+names(depth_beds) <- list.files(slfile("read_depth"))
+depth_df <- map_df(depth_beds, function(x) {
+  read_delim(x, col_names=FALSE, delim=" ")
+}, .id="LIB")
+
+depth_df <- depth_df %>%
+  mutate(RUN=gsub("_.*", "", LIB)) %>%
+  mutate(UNIQ_READS=X4 * 2) %>%
+  mutate(LIB=gsub("\\.single.*|_merge.*", "", LIB)) %>%
+  mutate(BC=gsub(".*_", "", LIB)) %>%
+  group_by(RUN) %>%
+  mutate(BC_ID=as.numeric(as.factor(BC))) %>%
+  ungroup() %>%
+  mutate(LIB_ID=paste(RUN, BC_ID, sep=".")) %>%
+  mutate(LIB_ID=factor(LIB_ID, levels=unique(.$LIB_ID)))
+
+p <- ggplot(depth_df, aes(LIB_ID, UNIQ_READS, fill=grepl("yi19", RUN))) +
+    geom_boxplot(outlier.colour="grey50", outlier.alpha=0.5, outlier.size=0.5) +
+    scale_fill_manual(values=c("orangered", "dodgerblue")) +
+    xlab("") +
+    ylab("# of unique insertions") +
+    theme_bw() +
+    scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                       breaks=scales::pretty_breaks(n=4), limits=c(0, 2500000)) +
+    theme(legend.position='none',
+          axis.line = element_line(colour = "black"),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank(),
+          axis.text.x = element_text(angle=90, hjust=1))
+
+p
+if (!is.na(fig_dir)) ggsave("figS3F.pdf", p, "pdf", fig_dir, height=4, width=7)
+```
+
+## Fig S3G
+
+Extrapolation through down sampling to infer relationship between number of unique reads and sequencing depth.
+
+```{r}
+celltype_annot <- read.table(slfile("barcode_tn5.txt"), stringsAsFactors=FALSE, header=TRUE)
+
+ds_df1 <- read.table(slfile("downsample_summary.tab"), stringsAsFactors=FALSE) %>%
+  dplyr::rename(N_READS=V1, FILE=V2) %>%
+  filter(FILE != "total" & !grepl("\\.TCCTTGTG", FILE)) %>%
+  mutate(TYPE=case_when(grepl("uniq", FILE) ~ "UNIQ",
+                        TRUE ~ "TOTAL"),
+         FILE=gsub(".uniq", "", FILE)) %>%
+  extract(FILE, c("CELL_ID", "FRAC"), "(.*).R1.human.Qgt0.(.*).bed", remove=FALSE) %>%
+  spread(TYPE, N_READS) %>%
+  mutate(DOWNSAMPLE=as.numeric(FRAC) / 10) %>%
+  mutate(RATIO=TOTAL / UNIQ) %>%
+  separate(CELL_ID, c("LIB", "BC"), sep="_", remove=FALSE) %>%
+  separate(BC, c("SSS", "ELSE"), sep="\\.") %>%
+  separate(ELSE, c("TN5", "LIGATION"), sep=8) %>%
+  left_join(celltype_annot, by="TN5")
+
+md1 <- lm(UNIQ ~ log10(RATIO), data=ds_df1)
+
+pred1 <- predict(md1, ds_df1)
+pred_intv1 <- predict(md1, interval="predict")
+pred_df1 <- ds_df1 %>%
+  mutate(FIT=pred_intv1[, "fit"],
+         LOWER=pred_intv1[, "lwr"],
+         UPPER=pred_intv1[, "upr"])
+
+# predict(md1, newdata=data.frame("RATIO"=10))
+# predict(md1, newdata=data.frame("RATIO"=5))
+
+ds_df2 <- read.table(slfile("yi140_GAACCG_downsample_summary.tab"), stringsAsFactors=FALSE) %>%
+  bind_rows(read.table(slfile("yi141_AGGATG_downsample_summary.tab"), stringsAsFactors=FALSE)) %>%
+  dplyr::rename(N_READS=V1, FILE=V2) %>%
+  mutate(FILE=gsub("downsample/", "", FILE)) %>%
+  filter(FILE != "total" & !grepl("uniq[1-9]", FILE)) %>%
+  mutate(TYPE=case_when(grepl("uniq", FILE) ~ "UNIQ",
+                        TRUE ~ "TOTAL"),
+         FILE=gsub(".uniq", "", FILE)) %>%
+  extract(FILE, c("CELL_ID", "FRAC"), "(.*).R1.human.Qgt0.(.*).bed", remove=FALSE) %>%
+  spread(TYPE, N_READS) %>%
+  mutate(DOWNSAMPLE=as.numeric(FRAC) / 10) %>%
+  mutate(RATIO=TOTAL / UNIQ) %>%
+  separate(CELL_ID, c("LIB", "BC"), sep="_", remove=FALSE) %>%
+  separate(BC, c("SSS", "ELSE"), sep="\\.") %>%
+  separate(ELSE, c("TN5", "LIGATION"), sep=8) %>%
+  left_join(celltype_annot, by="TN5")
+
+md2 <- lm(UNIQ ~ log10(RATIO), data=ds_df2)
+
+pred2 <- predict(md2, ds_df2)
+pred_intv2 <- predict(md2, interval="predict")
+pred_df2 <- ds_df2 %>%
+  mutate(FIT=pred_intv2[, "fit"],
+         LOWER=pred_intv2[, "lwr"],
+         UPPER=pred_intv2[, "upr"])
+
+# predict(md2, newdata=data.frame("RATIO"=1.78))
+# predict(md2, newdata=data.frame("RATIO"=5))
+# predict(md2, newdata=data.frame("RATIO"=10))
+
+p <- bind_rows(pred_df1 %>% mutate(CAT="yi129"), pred_df2 %>% mutate(CAT="yi140, 141")) %>%
+ggplot(aes(RATIO, UNIQ, color=CAT)) +
+  geom_point(alpha=0.05) +
+  geom_line(aes(RATIO, FIT, color=CAT), size=1, alpha=1) +
+  scale_color_manual(values=c("orangered", "dodgerblue"), name="Library") +
+  xlab("Depth") +
+  ylab("# of unique insertions") +
+  scale_y_continuous(labels=scales::format_format(scientific = FALSE)) +
+  # geom_ribbon(aes(x=RATIO, ymin=LOWER, ymax=UPPER), alpha=0.3, fill="orangered") +
+  theme_classic() +
+  theme(legend.position=c(1, 1), legend.justification=c(1, 1))
+p
+if (!is.na(fig_dir)) ggsave("figS3G.pdf", p, "pdf", fig_dir, height=2.5, width=3.5)
+```
+
+# Copy numbers
+
+```{r}
+plot_chr <- function(df, chr_size) {
+  chr_size <- mutate(chr_size, Chromosome=gsub("chr", "", Chromosome))
+  chrs <- unique(chr_size$Chromosome)
+  chr_levels <- chrs[order(as.numeric(chrs))]
+  df$Chromosome <- factor(df$Chromosome, levels=chr_levels)
+  
+  chr_size <- chr_size %>%
+    mutate(Chromosome=factor(Chromosome, levels=chr_levels)) %>%
+    arrange(Chromosome) %>%
+  mutate(Size_M=Size/1000000) %>%
+  mutate(Cumsize=cumsum(Size_M) - Size_M)
+
+  # add chromosome size to Start
+  df_new <- df %>%
+    arrange(Chromosome, Start) %>%
+    filter(Chromosome != "M") %>%
+    mutate(Start_M=Start/1000000) %>%
+    mutate(Cumstart=0)
+
+  for (i in seq_len(nrow(df_new))) {
+    this_chr <- df_new$Chromosome[i]
+    this_cumsize <- filter(chr_size, Chromosome == this_chr)$Cumsize
+    df_new[i, "Cumstart"] <- df_new[i, "Start_M"] + this_cumsize
+  }
+
+  g <- ggplot(df_new, aes(Cumstart, Ratio)) +
+    geom_vline(xintercept=chr_size$Cumsize, color="#f0f0f0") +
+    geom_point(aes(color=Chromosome), size=0.2, alpha=0.8) +
+    scale_color_manual(values=rep(c("orangered", "dodgerblue"), 12)) +
+    xlim(c(0, NA)) +
+    ylim(c(0, 5)) +
+    ylab("Relative chromosome\ncopy number") +
+    xlab("") +
+    theme_bw() +
+    theme(legend.position='none',
+          axis.line = element_line(colour = "black"),
+          axis.ticks.x = element_blank(),
+          axis.text.x = element_blank(),
+          panel.grid.major = element_blank(),
+          panel.grid.minor = element_blank(),
+          panel.border = element_blank(),
+          panel.background = element_blank())
+  
+  return(g)
+}
+```
+
+## Fig 1E
+
+```{r, fig.width=10, fig.height=1.5}
+h_freec_df <- read_tsv(slfile("yi129_GGGTGC.GTTACGCGGCAGTAG.bam_ratio.txt"), guess_max=1e7)
+h_chr_size <- read_tsv(slfile("hg19.len"), col_names=c("nouse", "Chromosome", "Size"), guess_max=1e7)
+
+m_freec_df <- read_tsv(slfile("yi129_GGGTGC.GTTACGCGCAAAACG.bam_ratio.txt"), guess_max=1e7)
+m_chr_size <- read_tsv(slfile("mm10.len"), col_names=c("Chromosome", "Size"), guess_max=1e7)
+
+p <- plot_chr(h_freec_df, h_chr_size)
+p
+if (!is.na(fig_dir)) ggsave("fig1E1.pdf", p, "pdf", fig_dir, height=2, width=12)
+p <- plot_chr(m_freec_df, m_chr_size)
+p
+if (!is.na(fig_dir)) ggsave("fig1E2.pdf", p, "pdf", fig_dir, height=2, width=12)
+```
+
+## Fig 1F
+
+```{r, fig.width=10, fig.height=3}
+aneuploidy_df <- read.table(slfile("lib144_aneuploidy.txt"), col.names=c("CELL",	"CHROM", "CHROM_SIZE", "CHROM_UNIQ_READS", "CHROM_READS_FRAC", "TOTAL_UNIQ_READS", "RATIO"), stringsAsFactors=FALSE) %>%
+  bind_rows(read.table(slfile("lib145_aneuploidy.txt"), col.names=c("CELL",	"CHROM", "CHROM_SIZE", "CHROM_UNIQ_READS", "CHROM_READS_FRAC", "TOTAL_UNIQ_READS", "RATIO"), stringsAsFactors=FALSE)) %>%
+  mutate(CHROM=factor(CHROM, levels=c(as.character(1:22), "X", "Y"))) %>%
+  mutate(CELL=gsub("./|.chr_prop.txt", "", CELL))
+
+aneu_df <- aneuploidy_df %>%
+  separate(CELL, c("LIB", "BC"), sep="_", remove=FALSE) %>%
+  separate(BC, c("SSS", "ELSE"), sep="\\.") %>%
+  separate(ELSE, c("TN5", "LIGATION"), sep=8) %>%
+  left_join(celltype_annot, by="TN5")
+
+p <- aneu_df %>%
+  # filter(CHROM != "Y") %>%
+  ggplot(aes(CHROM, RATIO)) +
+  # geom_jitter(aes(color=RATIO < 0.1), alpha=0.3) +
+  geom_boxplot(aes(fill=CELL_TYPE), outlier.shape=NA, outlier.stroke=NA, size=0.5) +
+  scale_fill_manual(values=c("orangered", "dodgerblue")) +
+  facet_wrap(~CELL_TYPE, nrow=2) +
+  coord_cartesian(ylim=c(0, 2)) +
+  xlab("Chromosome") +
+  ylab("Normalized copy number\nrelative to euploidy") +
+  theme_classic() +
+  theme(strip.background=element_blank(),
+        legend.position='none')
+
+p
+if (!is.na(fig_dir)) ggsave("fig1F.pdf", p, "pdf", fig_dir, width=12, height=3)
+```
+
+# Examples of crossover types
+
+## Fig 2A, haploid example
+
+```{r, fig.width=10, fig.height=3}
+hb_example <- readRDS(slfile("yi190_ACGCGA.ATCGCGTTGGCTTGG.filtered.rds"))
+hb_example_plot <- hb_example$haploidState %>%
+  mutate(POS=POS / 1e6) %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  ggplot(aes(POS, FREQ_ALT)) +
+  geom_point(alpha=0.05) +
+  geom_line(aes(POS, ALT_STATE - (ALT_STATE - 0.5) / 5), color="red") +
+  facet_wrap(~CHROM, nrow=2, scales="free_x") +
+  xlab("Chromosome coordinates (M)") +
+  ylab("Allele frequency\n(Spretus)") +
+  theme_classic() +
+  scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                     breaks=scales::pretty_breaks(n=2)) +
+  theme(legend.position='none',
+        strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+        strip.background = element_blank(),
+        axis.text.x = element_text(angle=45, hjust = 1))
+hb_example_plot
+if (!is.na(fig_dir)) ggsave("fig2A.pdf", hb_example_plot, "pdf", fig_dir, width=10, height=2.5)
+```
+
+## Fig 2B, M2 diploid, meiotic segragation example
+
+```{r, fig.width=10, fig.height=3}
+me_example <- readRDS(slfile("yi193_CGCTTG.CATCAAGGCACTGTT.filtered.rds"))
+me_example_plot <- me_example$m2DiploidState %>%
+  mutate(POS=POS / 1e6) %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  ggplot(aes(POS, FREQ_ALT)) +
+  geom_point(alpha=0.15) +
+  geom_line(aes(POS, ALT_STATE), color="red") +
+  facet_wrap(~CHROM, nrow=2, scales="free_x") +
+  xlim(c(3.7, NA)) +
+  xlab("Chromosome coordinates (M)") +
+  ylab("Allele frequency\n(Spretus)") +
+  theme_classic() +
+  scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                     breaks=scales::pretty_breaks(n=2)) +
+  theme(legend.position='none',
+        strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+        strip.background = element_blank(),
+        axis.text.x = element_text(angle=45, hjust = 1))
+
+me_example_plot
+if (!is.na(fig_dir)) ggsave("fig2B.pdf", me_example_plot, "pdf", fig_dir, width=10, height=2.5)
+```
+
+## Fig 2C, M2 diploid, mitotic segragation example
+
+```{r, fig.width=10, fig.height=3}
+mt_example <- readRDS(slfile("yi193_TATTCT.ACCATTTATCGGTTT.filtered.rds"))
+
+mt_example_plot <- mt_example$m2DiploidState %>%
+  # manually removed three artifacts, reflect it here
+  filter(!(CHROM == "chr8" & between(POS, 50e6, 100e6) & ALT_STATE == 0.5)) %>%
+  filter(!(CHROM == "chr16" & between(POS, 50e6, 75e6) & ALT_STATE == 0.5)) %>%
+  filter(!(CHROM == "chr17" & between(POS, 30e6, 50e6) & ALT_STATE == 0.5)) %>%
+  mutate(POS=POS / 1e6) %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  ggplot(aes(POS, FREQ_ALT)) +
+  geom_point(alpha=0.15) +
+  geom_line(aes(POS, ALT_STATE), color="red") +
+  facet_wrap(~CHROM, nrow=2, scales="free_x") +
+  xlab("Chromosome coordinates (M)") +
+  ylab("Allele frequency\n(Spretus)") +
+  theme_classic() +
+  scale_y_continuous(labels=scales::format_format(scientific = FALSE),
+                     breaks=scales::pretty_breaks(n=2)) +
+  theme(legend.position='none',
+        strip.text.x = element_text(margin = margin(0.1, 0, 0.1, 0, "cm")),
+        strip.background = element_blank(),
+        axis.text.x = element_text(angle=45, hjust = 1))
+
+mt_example_plot
+if (!is.na(fig_dir)) ggsave("fig2C.pdf", mt_example_plot, "pdf", fig_dir, width=10, height=2.5)
+```
+
+# Meiotic and mitotic chromosomes distribution
+
+```{r}
+m2_diploid<-read_tsv(slfile("m2.final.tab"))
+m2_upd<-read_tsv(slfile("m2.upd.tab"))
+hb_spret_df<-read_tsv(slfile("haploid.no0.hb.filtered.spret.tab"))
+haploid_spret_upd<-read_tsv(slfile("haploid.upd.0312.spret.tab"))
+```
+
+## Fig 2D
+
+```{r, fig.width=4, fig.height=3}
+# count chromosomes per cell that are me or mt in m2 and hp separately
+# me cells
+me_per_cell_m2 <- m2_diploid %>% 
+  filter(SEGREGATION %in% c("me", "hp")) %>%
+  bind_rows(filter(m2_upd, STRAIN %in% c("bpNA"))) %>%
+  distinct(CELL_ID, CHROM) %>%
+  count(CELL_ID)
+me_per_cell_m2_upd <- m2_upd %>% 
+  filter(STRAIN %in% c("spret", "b6")) %>%
+  distinct(CELL_ID, CHROM) %>% 
+  count(CELL_ID)
+drop0_per_cell <- m2_upd %>%
+  filter(STRAIN %in% c("drop0", "spret/drop0")) %>%
+  distinct(CELL_ID, CHROM) %>%
+  count(CELL_ID) %>%
+  dplyr::rename(n_drop0=n)
+me_per_cell_m2_merge <- full_join(me_per_cell_m2, me_per_cell_m2_upd,  by="CELL_ID", suffix=c("_m2","_m2_upd")) %>%
+  full_join(drop0_per_cell, drop0_per_cell, by="CELL_ID") %>%
+  replace_na(list(n_m2=0, n_m2_upd=0, n_drop0=0)) %>%
+  mutate(SUM_m2=n_m2+n_m2_upd+n_drop0)
+
+# mt cells
+mt_per_cell_m2 <- m2_diploid %>% 
+  filter(SEGREGATION=="mt") %>%
+  distinct(CELL_ID, CHROM) %>% 
+  count(CELL_ID)
+mt_per_cell_m2_upd <- m2_upd %>% 
+  filter(STRAIN %in% c("het")) %>%
+  distinct(CELL_ID, CHROM) %>% 
+  count(CELL_ID)
+mt_per_cell_m2_merge <- full_join(mt_per_cell_m2, mt_per_cell_m2_upd, by="CELL_ID", suffix=c("_m2","_m2_upd")) %>% 
+  replace_na(list(n_m2=0, n_m2_upd=0)) %>%
+  mutate(SUM_m2=n_m2+n_m2_upd)
+
+all_m2_merge <- full_join(mt_per_cell_m2_merge, me_per_cell_m2_merge, by="CELL_ID", suffix=c("_mt","_me")) %>% 
+  replace_na(list(n_m2_mt=0, n_m2_me=0, n_m2_upd_mt=0, n_m2_upd_me=0, SUM_m2_mt=0, SUM_m2_me=0)) %>%
+  mutate(SUM_m2 = SUM_m2_mt+SUM_m2_me) %>% 
+  mutate(rate_m2_me = SUM_m2_me/(SUM_m2_mt+SUM_m2_me)) %>% 
+  mutate(bp_m2 = n_m2_mt + n_m2_me) %>%
+  mutate(TYPE=case_when(SUM_m2_mt >= 15 ~ "Mitotic cell",
+                        SUM_m2_me >= 15 ~ "Meiotic cell",
+                        TRUE ~ "Others"))
+#write_tsv(all_m2_merge,"~/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/spret/all_m2_merge.spret.tab")
+
+p_obs <- all_m2_merge %>%
+  rowwise() %>%
+  mutate(n_na=max(0, 19 - n_m2_mt - n_m2_upd_mt - n_m2_me - n_m2_upd_me - n_drop0)) %>%
+  mutate(n_mt=n_m2_mt + n_m2_upd_mt, n_me=n_m2_me + n_m2_upd_me) %>%
+  mutate(SORT1=n_mt + n_na) %>%
+  arrange(n_mt, desc(n_me)) %>%
+  mutate(CELL_ID=factor(CELL_ID, levels=rev(unique(.$CELL_ID)))) %>%
+  gather(Category, Count, c("n_me", "n_drop0", "n_mt")) %>%
+  mutate(Category=factor(Category, levels=c("n_me", "n_drop0", "n_mt"))) %>%
+  ggplot(aes(CELL_ID, Count, fill=Category)) +
+  geom_bar(stat='identity', colour=NA, width=0.8) +
+  scale_fill_manual(values=c("n_mt"="deepskyblue", "n_me"="firebrick1", "n_drop0"="black")) +
+  theme_void() +
+  ggtitle("Observed")
+
+
+# simulate null distribution with p = 0.7606
+set.seed(1)
+simulate_m2 <- list()
+simulate_m2$n_me <- rbinom(292,19,0.7606)
+simulate_m2$n_mt <- 19-simulate_m2$n_me
+simulate_df <- as.data.frame(simulate_m2)
+simulate_df$CELL_ID <- seq_len(nrow(simulate_df))
+
+p_null_1 <- simulate_df %>%
+  arrange(desc(n_me)) %>%
+  mutate(CELL_ID=factor(CELL_ID, levels=rev(unique(.$CELL_ID)))) %>%
+  gather(Category, Count, c("n_me", "n_mt")) %>%
+  mutate(Category=factor(Category, levels=c("n_me", "n_mt"))) %>%
+  ggplot(aes(CELL_ID, Count, fill=Category)) +
+  geom_bar(stat='identity', colour=NA, width=0.8) +
+  scale_fill_manual(values=c("n_mt"="deepskyblue", "n_me"="firebrick1")) +
+  theme_void() +
+  ggtitle("Null: p=0.7606")
+
+# simulate null distribution with p = 0.5
+set.seed(1)
+simulate_m2 <- list()
+simulate_m2$n_me <- rbinom(292, 19, 0.5)
+simulate_m2$n_mt <- 19 - simulate_m2$n_me
+simulate_df <- as.data.frame(simulate_m2)
+simulate_df$CELL_ID <- seq_len(nrow(simulate_df))
+
+p_null_2 <- simulate_df %>%
+  arrange(desc(n_me)) %>%
+  mutate(CELL_ID=factor(CELL_ID, levels=rev(unique(.$CELL_ID)))) %>%
+  gather(Category, Count, c("n_me", "n_mt")) %>%
+  mutate(Category=factor(Category, levels=c("n_me", "n_mt"))) %>%
+  ggplot(aes(CELL_ID, Count, fill=Category)) +
+  geom_bar(stat='identity', colour=NA, width=0.8) +
+  scale_fill_manual(values=c("n_mt"="deepskyblue", "n_me"="firebrick1")) +
+  theme_void() +
+  ggtitle("Null: p=0.5")
+
+if (!is.na(fig_dir)) {
+  pdf(file.path(fig_dir, "fig2D.pdf"), width=10, height=4)
+  print(p_obs)
+  print(p_null_1)
+  print(p_null_2)
+  dev.off()
+}
+
+# Have decided not to use this following fig2d histogram
+# p <- bind_rows(me_per_cell_m2_merge[c("SUM_m2")] %>% mutate(TYPE="Meiotic segregation"),
+#           mt_per_cell_m2_merge[c("SUM_m2")] %>% mutate(TYPE="Mitotic segregation")) %>%
+#   ggplot(aes(SUM_m2, fill=TYPE)) +
+#   geom_histogram(binwidth=.5, position="dodge") +
+#   scale_fill_manual(name="", values=c("orangered", "dodgerblue")) +
+#   xlab("# of chromosomes") +
+#   ylab("Count") +
+#   theme_classic() +
+#   theme(legend.position = c(0.7, 0.9))
+# 
+# p
+# if (!is.na(fig_dir)) ggsave("fig2D.pdf", p, "pdf", fig_dir, width=4, height=3)
+```
+##### FEN calculate # of crossovers in meiotic and mitotic cells only
+```{r}
+all_m2_merge_biased <- all_m2_merge %>%
+  filter(TYPE %in% c("Mitotic cell","Meiotic cell"))
+
+m2_spret_df <- m2_diploid %>%
+  filter(CELL_ID %in% all_m2_merge_biased$CELL_ID)
+m2_spret_upd <- m2_upd %>%
+  filter(CELL_ID %in% all_m2_merge_biased$CELL_ID)
+
+dim(m2_spret_df)
+dim(m2_spret_upd)
+#write_tsv(m2_diploid_upd,"~/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/spret/m2.upd.spret.tab")
+
+#######compare crossover number between B6/Cast and B6/Spret
+hb_cast_df<-read_tsv("~/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/cast/haploid.no0.hb.filtered.cast.tab")
+dim(hb_cast_df)
+#hb_spret_df<-read_tsv("~/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/spret/haploid.no0.hb.filtered.tab")
+m2_cast_df<-read_tsv("~/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/cast/m2diploid.concensus.mb.cast.tab")
+dim(m2_cast_df)
+
+co_per_cell_hp_cast <- hb_cast_df %>% 
+  group_by(CELL_ID) %>% 
+  mutate(count = n()) %>% 
+  distinct(CELL_ID, count) 
+
+co_per_cell_hp_spret <- hb_spret_df %>% 
+  group_by(CELL_ID) %>% 
+  mutate(count = n()) %>% 
+  distinct(CELL_ID, count) 
+
+co_per_cell_m2_spret <- m2_spret_df %>%
+  group_by(CELL_ID) %>%
+  mutate(count = n()) %>%
+  distinct(CELL_ID, count)
+
+co_per_cell_m2_cast <- m2_cast_df %>%
+  group_by(CELL_ID) %>%
+  mutate(count = n()) %>%
+  distinct(CELL_ID, count)
+
+wilcox.test(co_per_cell_hp_cast$count, co_per_cell_hp_spret$count)$p.value
+wilcox.test(co_per_cell_m2_cast$count, co_per_cell_m2_spret$count)$p.value
+mean(co_per_cell_hp_cast$count)/19
+mean(co_per_cell_hp_spret$count)/19
+mean(co_per_cell_m2_cast$count)/19
+mean(co_per_cell_m2_spret$count)/19
+
+
+```
+
+
+## Fig 2E
+
+```{r, fig.width=10, fig.height=4}
+p <- all_m2_merge %>%
+  rowwise() %>%
+  mutate(n_na=max(0, 19 - n_m2_mt - n_m2_upd_mt - n_m2_me - n_m2_upd_me - n_drop0)) %>%
+  mutate(SORT1=n_m2_mt + n_m2_upd_mt) %>%
+  arrange(SORT1, n_m2_upd_mt, n_m2_mt, n_m2_upd_me, desc(n_m2_me)) %>%
+  mutate(CELL_ID=factor(CELL_ID, levels=rev(unique(.$CELL_ID)))) %>%
+  gather(Category, Count, c(2,3,5,6,7)) %>%
+  mutate(Category=factor(Category, levels=c("n_m2_me", "n_m2_upd_me", "n_drop0", "n_m2_mt", "n_m2_upd_mt"))) %>%
+  ggplot(aes(CELL_ID, Count, fill=Category)) +
+  geom_bar(stat='identity', colour=NA, width=0.8) +
+  scale_fill_manual(values=c("n_m2_me"="mistyrose", "n_m2_upd_me"="firebrick1", "n_m2_mt"="darkolivegreen1", "n_m2_upd_mt"="deepskyblue", "n_drop0"="black")) +
+  theme_void()
+
+p
+#if (!is.na(fig_dir)) ggsave("fig2E.pdf", p, "pdf", fig_dir, width=10, height=4)
+```
+
+# Meiotic crossover and uniparental chromosome distributions at the chromosome scale
+
+```{r}
+mm10_fai_df <- read_tsv(slfile("mm10.fa.fai"), col_names=c("CHROM", "CHROM_SIZE", "BI", "BASES_PER_LINE", "BYTES_PER_LINE"))
+hb_spret_df <- read_tsv(slfile("haploid.no0.hb.filtered.spret.tab"))
+dim(hb_spret_df)
+#m2_spret_df <- read_tsv(slfile("m2diploid.concensus.mb.spret.tab"))
+```
+
+## Fig 4A
+
+Number of haploid break points normalized by chromosome size ~ chromosome size
+
+```{r}
+df <- hb_spret_df %>%
+  count(CHROM) %>%
+  left_join(mm10_fai_df, by="CHROM") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  mutate(CHROM_SIZE=CHROM_SIZE / 1e6) %>%
+  mutate(CHROM=gsub("chr", "", CHROM)) %>%
+  mutate(NORM_N=n / length(unique(hb_spret_df$CELL_ID)) / CHROM_SIZE * 2 * 100)
+
+p <- ggplot(df, aes(CHROM_SIZE, NORM_N)) +
+  geom_point(alpha=0.7) +
+  geom_text_repel(aes(label=CHROM)) +
+  xlab("Chromosome size (Mb)") +
+  ylab("Crossover density (cM / Mb)") +
+  theme_classic()
+
+p
+r <- cor.test(df$NORM_N, df$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+if (!is.na(fig_dir)) ggsave("fig4A.pdf", p, "pdf", fig_dir, width=3, height=3)
+```
+
+## Fig S6A
+
+Number of haploid break points normalized by chromosome size ~ chromosome size
+
+```{r}
+df <- hb_cast_df %>%
+  count(CHROM) %>%
+  left_join(mm10_fai_df, by="CHROM") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  mutate(CHROM_SIZE=CHROM_SIZE / 1e6) %>%
+  mutate(CHROM=gsub("chr", "", CHROM)) %>%
+  mutate(NORM_N=n / length(unique(hb_cast_df$CELL_ID)) / CHROM_SIZE * 2 * 100)
+
+p <- ggplot(df, aes(CHROM_SIZE, NORM_N)) +
+  geom_point(alpha=0.7) +
+  geom_text_repel(aes(label=CHROM)) +
+  xlab("Chromosome size (Mb)") +
+  ylab("Crossover density (cM / Mb)") +
+  theme_classic()
+
+p
+r <- cor.test(df$NORM_N, df$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+if (!is.na(fig_dir)) ggsave("figS6A.pdf", p, "pdf", fig_dir, width=3, height=3)
+```
+
+## Fig 4B
+
+Number of M2 diploid break points normalized by chromosome size ~ chromosome size
+
+```{r}
+df <- m2_spret_df %>%
+  count(CHROM) %>%
+  left_join(mm10_fai_df, by="CHROM") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  mutate(CHROM_SIZE=CHROM_SIZE / 1e6) %>%
+  mutate(CHROM=gsub("chr", "", CHROM)) %>%
+  mutate(NORM_N=n / length(unique(m2_spret_df$CELL_ID)) / CHROM_SIZE * 100)
+p <- ggplot(df, aes(CHROM_SIZE, NORM_N)) +
+  geom_point(alpha=0.7) +
+  geom_text_repel(aes(label=CHROM)) +
+  xlab("Chromosome size (Mb)") +
+  ylab("Crossover density (cM / Mb)") +
+  theme_classic()
+
+p
+r <- cor.test(df$NORM_N, df$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+if (!is.na(fig_dir)) ggsave("fig4B.pdf", p, "pdf", fig_dir, width=3, height=3)
+```
+
+## Fig S6B
+
+Number of M2 diploid break points normalized by chromosome size ~ chromosome size
+
+```{r}
+df <- m2_cast_df %>%
+  count(CHROM) %>%
+  left_join(mm10_fai_df, by="CHROM") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  mutate(CHROM_SIZE=CHROM_SIZE / 1e6) %>%
+  mutate(CHROM=gsub("chr", "", CHROM)) %>%
+  mutate(NORM_N=n / length(unique(m2_cast_df$CELL_ID)) / CHROM_SIZE * 100)
+p <- ggplot(df, aes(CHROM_SIZE, NORM_N)) +
+  geom_point(alpha=0.7) +
+  geom_text_repel(aes(label=CHROM)) +
+  xlab("Chromosome size (Mb)") +
+  ylab("Crossover density (cM / Mb)") +
+  theme_classic()
+
+p
+r <- cor.test(df$NORM_N, df$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+if (!is.na(fig_dir)) ggsave("figS6B.pdf", p, "pdf", fig_dir, width=3, height=3)
+```
+
+
+## Fig S5A
+
+Number of haploid break points (at least one on a chromosome) normalized by chromosome size ~ chromosome size
+
+```{r}
+df <- hb_spret_df %>%
+  distinct(CELL_ID, CHROM) %>%
+  count(CHROM) %>%
+  left_join(mm10_fai_df, by="CHROM") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  mutate(CHROM_SIZE=CHROM_SIZE / 1e6) %>%
+  mutate(CHROM=gsub("chr", "", CHROM)) %>%
+  mutate(NORM_N=n / length(unique(hb_spret_df$CELL_ID)) / CHROM_SIZE * 2 * 100) 
+
+p <-  ggplot(df, aes(CHROM_SIZE, NORM_N)) +
+  geom_point(alpha=0.7) +
+  geom_text_repel(aes(label=CHROM)) +
+  xlab("Chromosome size (Mb)") +
+  ylab("Crossover density (alt_cM / Mb)") +
+  theme_classic()
+
+p
+
+r <- cor.test(df$NORM_N, df$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+if (!is.na(fig_dir)) ggsave("figS5A.pdf", p, "pdf", fig_dir, width=3, height=3)
+```
+## Fig S6C
+
+Number of haploid break points (at least one on a chromosome) normalized by chromosome size ~ chromosome size
+
+```{r}
+df <- hb_cast_df %>%
+  distinct(CELL_ID, CHROM) %>%
+  count(CHROM) %>%
+  left_join(mm10_fai_df, by="CHROM") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  mutate(CHROM_SIZE=CHROM_SIZE / 1e6) %>%
+  mutate(CHROM=gsub("chr", "", CHROM)) %>%
+  mutate(NORM_N=n / length(unique(hb_cast_df$CELL_ID)) / CHROM_SIZE * 2 * 100) 
+
+p <-  ggplot(df, aes(CHROM_SIZE, NORM_N)) +
+  geom_point(alpha=0.7) +
+  geom_text_repel(aes(label=CHROM)) +
+  xlab("Chromosome size (Mb)") +
+  ylab("Crossover density (alt_cM / Mb)") +
+  theme_classic()
+
+p
+
+r <- cor.test(df$NORM_N, df$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+if (!is.na(fig_dir)) ggsave("figS6C.pdf", p, "pdf", fig_dir, width=3, height=3)
+```
+
+## Fig S5B
+
+Number of M2 diploid break points (at least one on a chromosome) normalized by chromosome size ~ chromosome size
+
+```{r}
+df <- m2_spret_df %>%
+  distinct(CELL_ID, CHROM) %>%
+  count(CHROM) %>%
+  left_join(mm10_fai_df, by="CHROM") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  mutate(CHROM_SIZE=CHROM_SIZE / 1e6) %>%
+  mutate(CHROM=gsub("chr", "", CHROM)) %>%
+  mutate(NORM_N=n / length(unique(m2_spret_df$CELL_ID)) / CHROM_SIZE * 100)
+
+p <-  ggplot(df, aes(CHROM_SIZE, NORM_N)) +
+  geom_point(alpha=0.7) +
+  geom_text_repel(aes(label=CHROM)) +
+  xlab("Chromosome size (Mb)") +
+  ylab("Crossover density (alt_cM / Mb)") +
+  theme_classic()
+
+p
+r <- cor.test(df$NORM_N, df$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+
+if (!is.na(fig_dir)) ggsave("figS5B.pdf", p, "pdf", fig_dir, width=3, height=3)
+```
+## Fig S6D
+
+Number of M2 diploid break points (at least one on a chromosome) normalized by chromosome size ~ chromosome size
+
+```{r}
+df <- m2_cast_df %>%
+  distinct(CELL_ID, CHROM) %>%
+  count(CHROM) %>%
+  left_join(mm10_fai_df, by="CHROM") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  mutate(CHROM_SIZE=CHROM_SIZE / 1e6) %>%
+  mutate(CHROM=gsub("chr", "", CHROM)) %>%
+  mutate(NORM_N=n / length(unique(m2_cast_df$CELL_ID)) / CHROM_SIZE * 100)
+
+p <-  ggplot(df, aes(CHROM_SIZE, NORM_N)) +
+  geom_point(alpha=0.7) +
+  geom_text_repel(aes(label=CHROM)) +
+  xlab("Chromosome size (Mb)") +
+  ylab("Crossover density (alt_cM / Mb)") +
+  theme_classic()
+
+p
+r <- cor.test(df$NORM_N, df$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+
+if (!is.na(fig_dir)) ggsave("figS6D.pdf", p, "pdf", fig_dir, width=3, height=3)
+```
+
+# CO count distribution within 1 cell
+
+## Fig 4C and S5C
+
+```{r}
+co_per_chr_hb_spret_df <- hb_spret_df %>%
+  group_by(CELL_ID, CHROM) %>%
+  summarise(N_BREAKS_CHROM=n()) %>%
+  ungroup() %>%
+  right_join(expand.grid(unique(hb_spret_df$CELL_ID), setdiff(unique(hb_spret_df$CHROM), c("chrX", "chrY")), stringsAsFactors=FALSE), by=c("CELL_ID"="Var1", "CHROM"="Var2")) %>%
+  replace_na(list(N_BREAKS_CHROM=0L))
+
+co_per_chr_hb_cast_df <- hb_cast_df %>%
+  group_by(CELL_ID, CHROM) %>%
+  summarise(N_BREAKS_CHROM=n()) %>%
+  ungroup() %>%
+  right_join(expand.grid(unique(hb_cast_df$CELL_ID), setdiff(unique(hb_cast_df$CHROM), c("chrX", "chrY")), stringsAsFactors=FALSE), by=c("CELL_ID"="Var1", "CHROM"="Var2")) %>%
+  replace_na(list(N_BREAKS_CHROM=0L))
+
+df <- count(co_per_chr_hb_spret_df, N_BREAKS_CHROM) %>%
+  mutate(Strain="B6/Spret") %>%
+  mutate(freq=n/sum(n)) %>%
+  bind_rows(count(co_per_chr_hb_cast_df, N_BREAKS_CHROM) %>%
+              mutate(Strain="B6/Cast") %>%
+              mutate(freq=n/sum(n)))
+
+p_freq <- ggplot(df, aes(N_BREAKS_CHROM, freq, group=Strain)) +
+  geom_bar(aes(fill=Strain), stat='identity', position=position_dodge()) +
+  scale_fill_manual(values=c("orangered", "coral")) +
+  xlab("# of CO per chr") + 
+  ylab("Frequency") +
+  scale_x_continuous(breaks=c(0:5), limits=c(-0.5, 5)) +
+  theme_classic()
+
+p_n <- ggplot(df, aes(N_BREAKS_CHROM, n, group=Strain)) +
+  geom_bar(aes(fill=Strain), stat='identity', position=position_dodge()) +
+  scale_fill_manual(values=c("orangered", "coral")) +
+  xlab("# of CO per chr") + 
+  ylab("Count") +
+  scale_x_continuous(breaks=c(0:5), limits=c(-0.5, 5)) +
+  theme_classic()
+
+p_freq
+
+p_n
+
+if (!is.na(fig_dir)) ggsave("fig4C.pdf", p_freq, "pdf", fig_dir, width=4, height=2.5)
+if (!is.na(fig_dir)) ggsave("figS5C.pdf", p_n, "pdf", fig_dir, width=4, height=2.5)
+```
+
+## Fig 4D and S5D
+
+```{r}
+co_per_chr_m2_spret_df <- m2_spret_df %>%
+  group_by(CELL_ID, CHROM) %>%
+  summarise(N_BREAKS_CHROM=n()) %>%
+  ungroup() %>%
+  right_join(expand.grid(unique(m2_spret_df$CELL_ID), setdiff(unique(m2_spret_df$CHROM), c("chrX", "chrY")), stringsAsFactors=FALSE), by=c("CELL_ID"="Var1", "CHROM"="Var2")) %>%
+  replace_na(list(N_BREAKS_CHROM=0L))
+
+co_per_chr_m2_cast_df <- m2_cast_df %>%
+  group_by(CELL_ID, CHROM) %>%
+  summarise(N_BREAKS_CHROM=n()) %>%
+  ungroup() %>%
+  right_join(expand.grid(unique(m2_cast_df$CELL_ID), setdiff(unique(m2_cast_df$CHROM), c("chrX", "chrY")), stringsAsFactors=FALSE), by=c("CELL_ID"="Var1", "CHROM"="Var2")) %>%
+  replace_na(list(N_BREAKS_CHROM=0L))
+
+df <- count(co_per_chr_m2_spret_df, N_BREAKS_CHROM) %>%
+  mutate(Strain="B6/Spret") %>%
+  mutate(freq=n/sum(n)) %>%
+  bind_rows(count(co_per_chr_m2_cast_df, N_BREAKS_CHROM) %>%
+              mutate(Strain="B6/Cast") %>%
+              mutate(freq=n/sum(n)))
+
+p_freq <- ggplot(df, aes(N_BREAKS_CHROM, freq, group=Strain)) +
+  geom_bar(aes(fill=Strain), stat='identity', position=position_dodge()) +
+  scale_fill_manual(values=c("dodgerblue", "deepskyblue")) +
+  xlab("# of CO per chr") + 
+  ylab("Frequency") +
+  scale_x_continuous(breaks=c(0:5), limits=c(-0.5, 5)) +
+  theme_classic()
+
+p_n <- ggplot(df, aes(N_BREAKS_CHROM, n, group=Strain)) +
+  geom_bar(aes(fill=Strain), stat='identity', position=position_dodge()) +
+  scale_fill_manual(values=c("dodgerblue", "deepskyblue")) +
+  xlab("# of CO per chr") + 
+  ylab("Count") +
+  scale_x_continuous(breaks=c(0:5), limits=c(-0.5, 5)) +
+  theme_classic()
+
+p_freq
+p_n
+
+if (!is.na(fig_dir)) ggsave("fig4D.pdf", p_freq, "pdf", fig_dir, width=4, height=2.5)
+if (!is.na(fig_dir)) ggsave("figS5D.pdf", p_n, "pdf", fig_dir, width=4, height=2.5)
+```
+
+# Uniparental chromosome distributions
+
+## FEN upd test and generate haploid_cast_upd
+```{r, fig.width=6, fig.height=2}
+all_spret_upd <- read_tsv(slfile("all.upd.spret.tab"))
+dim(all_spret_upd)
+
+test_haploid_spret_upd <- all_spret_upd %>% 
+  unite(CELL_ID_CHROM, c(CELL_ID,CHROM), remove=FALSE) %>% 
+  filter(!CELL_ID_CHROM %in% (hb_spret_df %>% unite(CELL_ID_CHROM, c(CELL_ID,CHROM)))$CELL_ID_CHROM) %>% 
+  #filter(UPD_STATUS != "OTHER") %>% 
+  filter(!CHROM %in% c("chrX", "chrY")) %>% 
+  filter(CELL_ID %in% hb_spret_df$CELL_ID)
+
+dim(test_haploid_spret_upd) # 14375 5
+haploid_spret_old <- read_tsv("/Users/yiyin/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/spret/haploid.upd.tab") # 14375 with 937 het
+
+haploid_spret_old %>% 
+  unite(CELL_ID_CHROM, c(CELL_ID,CHROM), remove=FALSE) %>% 
+  filter(!CELL_ID_CHROM %in% (test_haploid_spret_upd %>% unite(CELL_ID_CHROM, c(CELL_ID,CHROM)))$CELL_ID_CHROM) %>% dim() # 0 4
+
+dim(haploid_spret_upd) # haploid_spret_upd is by reading haploid.upd.0312.tab, i.e., manually corrected UPD file that has 888 het out of the 937.
+length(unique(haploid_spret_upd$CHROM))
+
+temp <- hb_spret_df %>%
+  unite(CELL_ID_CHROM, c(CELL_ID,CHROM), remove=FALSE)
+length(unique(temp$CELL_ID_CHROM)) # this includes 1 on X and 1 on Y
+
+#Now generate haploid_cast_upd
+
+all_cast_upd <- read_tsv("/Users/yiyin/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/cast/all.upd.cast.tab")
+dim(all_cast_upd)
+
+haploid_cast_upd <- all_cast_upd %>% 
+  unite(CELL_ID_CHROM, c(CELL_ID,CHROM), remove=FALSE) %>% 
+  filter(!CELL_ID_CHROM %in% (hb_cast_df %>% unite(CELL_ID_CHROM, c(CELL_ID,CHROM)))$CELL_ID_CHROM) %>% 
+  #filter(UPD_STATUS != "OTHER") %>% 
+  filter(!CHROM %in% c("chrX", "chrY")) %>% 
+  filter(CELL_ID %in% hb_cast_df$CELL_ID)
+
+dim(haploid_cast_upd) # 32037  5, if no het, 31217 5, 820 het
+
+length(unique(haploid_cast_upd$CHROM))
+
+hb_cast_df%>%filter(CHROM %in% c("chrX", "chrY"))%>% View()
+
+temp <- hb_cast_df %>%
+  unite(CELL_ID_CHROM, c(CELL_ID,CHROM), remove=FALSE)
+length(unique(temp$CELL_ID_CHROM)) # this includes 0 on X or Y
+
+write_tsv(haploid_cast_upd, "~/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/cast/haploid.Rout.upd.cast.tab") # change REF to cast, ALT to b6, OTHER to het
+
+haploid_cast_upd <- read_tsv("/Users/yiyin/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/cast/haploid.upd.cast.tab")
+dim(haploid_cast_upd)
+```
+
+## Fig 4F
+
+```{r, fig.width=6, fig.height=2}
+all_spret_upd <- read_tsv(slfile("all.upd.spret.tab"))
+
+all_upd_w_cellstatus <- all_spret_upd %>%
+  mutate(CELL_STATUS=case_when(CELL_ID %in% hb_spret_df$CELL_ID ~ "Haploid", 
+                               CELL_ID %in% m2_spret_df$CELL_ID ~ "M2 diploid", 
+                               TRUE ~ "Other"))
+
+# Uniparental chromosome dist for M2 diploid cells
+m2_spret_upd %>% 
+  filter(STRAIN %in% c("spret","b6")) %>% dim()
+
+m2_hist_input <- m2_spret_upd %>% 
+  group_by(CELL_ID) %>%
+  summarise(count=sum(STRAIN %in% c("spret","b6"))) %>%
+  group_by(count) %>%
+  summarise(number=n())
+m2_hist_input[1,2] <- m2_hist_input[1,2] + 41L
+
+# Uniparental chromosome dist for haploid cells
+all_upd_chr_per_cell_dist <- all_spret_upd %>%
+  left_join(haploid_spret_upd, by=c("CELL_ID", "CHROM")) %>%
+  mutate(CELL_STATUS=case_when(CELL_ID %in% m2_spret_df$CELL_ID ~ "M2 diploid",
+                               CELL_ID %in% hb_spret_df$CELL_ID ~ "Haploid",
+                               TRUE ~ "Other")) %>%
+  mutate(UPD_STATUS=case_when(STRAIN %in% c("b6", "spret") ~ "UPD",
+                              TRUE ~ "NOUPD")) %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  group_by(CELL_ID, CELL_STATUS) %>%
+  summarise(N_UPD_CHR=sum(UPD_STATUS == "UPD")) %>%
+  group_by(CELL_STATUS, N_UPD_CHR) %>%
+  summarise(N_CELL=n()) %>%
+  mutate(N_UPD_CHR=as.integer(N_UPD_CHR), N_CELL=as.integer(N_CELL))
+
+all_upd_chr_per_cell_dist[18, 2:3] <- c(0L, 41L) # doesn't seem to matter because only haploid will be used from this table but anyways...
+
+df <- m2_hist_input %>%
+  mutate(CELL_STATUS="M2 diploid") %>%
+  dplyr::rename(N_CELL=number, N_UPD_CHR=count) %>%
+  bind_rows(all_upd_chr_per_cell_dist %>%
+              filter(CELL_STATUS == "Haploid")) %>%
+  bind_rows(all_upd_w_cellstatus %>%
+              filter(CELL_STATUS == "Other") %>%
+              group_by(CELL_ID) %>%
+              summarise(N_UPD_CHR=sum(UPD_STATUS != "OTHER")) %>%
+              group_by(N_UPD_CHR) %>%
+              summarise(N_CELL=n()) %>%
+              mutate(CELL_STATUS="Other diploid/4C"))
+
+p <- ggplot(df, aes(N_UPD_CHR, N_CELL)) +
+  geom_bar(stat='identity') +
+  xlab("# of uniparental chromosomes") +
+  ylab("# of cells") +
+  facet_wrap(~CELL_STATUS, scales='free_y') +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p
+if (!is.na(fig_dir)) ggsave("fig4F.pdf", p, "pdf", fig_dir, width=4, height=1.5)
+```
+
+## Fig S6F
+
+```{r, fig.width=6, fig.height=2}
+#all_cast_upd <- read_tsv(slfile("all.upd.cast.tab"))
+
+all_upd_w_cellstatus <- all_cast_upd %>%
+  mutate(CELL_STATUS=case_when(CELL_ID %in% hb_cast_df$CELL_ID ~ "Haploid", 
+                               CELL_ID %in% m2_cast_df$CELL_ID ~ "M2 diploid", 
+                               TRUE ~ "Other"))
+
+# Uniparental chromosome dist for M2 diploid cells
+m2_cast_upd <- read_tsv("/Users/yiyin/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/cast/m2.upd.cast.tab")
+m2_cast_upd %>% 
+  filter(STRAIN %in% c("cast","b6")) %>% dim()
+
+m2_hist_input <- m2_cast_upd %>% 
+  group_by(CELL_ID) %>%
+  summarise(count=sum(STRAIN %in% c("cast","b6"))) %>%
+  group_by(count) %>%
+  summarise(number=n())
+m2_hist_input[1,2] <- m2_hist_input[1,2] + 61L
+
+# Uniparental chromosome dist for haploid cells
+all_upd_chr_per_cell_dist <- all_cast_upd %>%
+  left_join(haploid_cast_upd, by=c("CELL_ID", "CHROM")) %>%
+  mutate(CELL_STATUS=case_when(CELL_ID %in% m2_cast_df$CELL_ID ~ "M2 diploid",
+                               CELL_ID %in% hb_cast_df$CELL_ID ~ "Haploid",
+                               TRUE ~ "Other")) %>%
+  mutate(UPD_STATUS=case_when(STRAIN %in% c("b6", "cast") ~ "UPD",
+                              TRUE ~ "NOUPD")) %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  group_by(CELL_ID, CELL_STATUS) %>%
+  summarise(N_UPD_CHR=sum(UPD_STATUS == "UPD")) %>%
+  group_by(CELL_STATUS, N_UPD_CHR) %>%
+  summarise(N_CELL=n()) %>%
+  mutate(N_UPD_CHR=as.integer(N_UPD_CHR), N_CELL=as.integer(N_CELL))
+
+all_upd_chr_per_cell_dist[18, 2:3] <- c(0L, 61L) # doesn't seem to matter because only haploid will be used from this table but anyways...
+
+df <- m2_hist_input %>%
+  mutate(CELL_STATUS="M2 diploid") %>%
+  dplyr::rename(N_CELL=number, N_UPD_CHR=count) %>%
+  bind_rows(all_upd_chr_per_cell_dist %>%
+              filter(CELL_STATUS == "Haploid")) %>%
+  bind_rows(all_upd_w_cellstatus %>%
+              filter(CELL_STATUS == "Other") %>%
+              group_by(CELL_ID) %>%
+              summarise(N_UPD_CHR=sum(UPD_STATUS != "OTHER")) %>%
+              group_by(N_UPD_CHR) %>%
+              summarise(N_CELL=n()) %>%
+              mutate(CELL_STATUS="Other diploid/4C"))
+
+p <- ggplot(df, aes(N_UPD_CHR, N_CELL)) +
+  geom_bar(stat='identity') +
+  xlab("# of uniparental chromosomes") +
+  ylab("# of cells") +
+  facet_wrap(~CELL_STATUS, scales='free_y') +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p
+if (!is.na(fig_dir)) ggsave("figS6F.pdf", p, "pdf", fig_dir, width=4, height=1.5)
+```
+
+## Fig 4G
+
+```{r, fig.width=6, fig.height=2}
+all_upd_chr_dist_other <- all_upd_w_cellstatus %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  filter(CELL_STATUS=="Other") %>%
+  group_by(CELL_STATUS, CHROM) %>%
+  summarise(N_CELL_WITH_UPD_CHR=sum(UPD_STATUS %in% c("REF", "ALT")))
+
+sum(all_upd_chr_dist_other$N_CELL_WITH_UPD_CHR)/(4973+52)
+
+all_upd_chr_dist_hp <- haploid_spret_upd %>%
+  mutate(CELL_STATUS="Haploid") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  group_by(CELL_STATUS, CHROM) %>%
+  summarise(N_CELL_WITH_UPD_CHR=sum(STRAIN %in% c("spret", "b6")))
+
+all_upd_chr_dist_m2 <- m2_spret_upd %>%
+  mutate(CELL_STATUS="M2 diploid") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  group_by(CELL_STATUS, CHROM) %>%
+  summarise(N_CELL_WITH_UPD_CHR=sum(STRAIN %in% c("spret", "b6")))
+
+chr_size <- all_upd_chr_dist_hp %>% left_join(mm10_fai_df, by="CHROM")
+r <- cor.test(all_upd_chr_dist_hp$N_CELL_WITH_UPD_CHR, chr_size$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+r <- cor.test(all_upd_chr_dist_other$N_CELL_WITH_UPD_CHR, chr_size$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+r <- cor.test(all_upd_chr_dist_m2$N_CELL_WITH_UPD_CHR, chr_size$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+
+all_upd_chr_dist<-bind_rows(all_upd_chr_dist_hp, all_upd_chr_dist_m2, all_upd_chr_dist_other) %>%
+  mutate(CHROM=as.integer(gsub("chr", "", CHROM)))
+
+p <- ggplot(all_upd_chr_dist, aes(CHROM, N_CELL_WITH_UPD_CHR)) +
+  geom_bar(stat='identity') +
+  xlab("Chromosome") +
+  ylab("# of cells") +
+  scale_x_continuous(breaks=c(1, 5, 10, 15, 19)) +
+  facet_wrap(~CELL_STATUS, scales='free_y') +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p
+if (!is.na(fig_dir)) ggsave("fig4G.pdf", p, "pdf", fig_dir, width=4, height=1.5)
+```
+
+## Fig S6G
+
+```{r, fig.width=6, fig.height=2}
+all_upd_chr_dist_other <- all_upd_w_cellstatus %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  filter(CELL_STATUS=="Other") %>%
+  group_by(CELL_STATUS, CHROM) %>%
+  summarise(N_CELL_WITH_UPD_CHR=sum(UPD_STATUS %in% c("REF", "ALT")))
+
+all_upd_chr_dist_hp <- haploid_cast_upd %>%
+  mutate(CELL_STATUS="Haploid") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  group_by(CELL_STATUS, CHROM) %>%
+  summarise(N_CELL_WITH_UPD_CHR=sum(STRAIN %in% c("cast", "b6")))
+
+all_upd_chr_dist_m2 <- m2_cast_upd %>%
+  mutate(CELL_STATUS="M2 diploid") %>%
+  filter(!CHROM %in% c("chrX", "chrY")) %>%
+  group_by(CELL_STATUS, CHROM) %>%
+  summarise(N_CELL_WITH_UPD_CHR=sum(STRAIN %in% c("cast", "b6")))
+
+chr_size <- all_upd_chr_dist_hp %>% left_join(mm10_fai_df, by="CHROM")
+r <- cor.test(all_upd_chr_dist_hp$N_CELL_WITH_UPD_CHR, chr_size$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+r <- cor.test(all_upd_chr_dist_other$N_CELL_WITH_UPD_CHR, chr_size$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+r <- cor.test(all_upd_chr_dist_m2$N_CELL_WITH_UPD_CHR, chr_size$CHROM_SIZE, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+
+all_upd_chr_dist<-bind_rows(all_upd_chr_dist_hp, all_upd_chr_dist_m2, all_upd_chr_dist_other) %>%
+  mutate(CHROM=as.integer(gsub("chr", "", CHROM)))
+
+p <- ggplot(all_upd_chr_dist, aes(CHROM, N_CELL_WITH_UPD_CHR)) +
+  geom_bar(stat='identity') +
+  xlab("Chromosome") +
+  ylab("# of cells") +
+  scale_x_continuous(breaks=c(1, 5, 10, 15, 19)) +
+  facet_wrap(~CELL_STATUS, scales='free_y') +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p
+if (!is.na(fig_dir)) ggsave("figS6G.pdf", p, "pdf", fig_dir, width=4, height=1.5) #chr6,9,13,16,19 are hot for reverse segregation?
+```
+
+
+# Distance between two crossovers co-occurring on the same chromosome
+
+## Fig 4E, Fig S5E
+
+```{r, fig.width=10, fig.height=6}
+# sampled null tracts, use them to calculate null distribution of co distances
+hb_ctrl_df <- read_tsv(slfile("hb_sample.01.bed"), col_names=c("CHROM", "START", "END"))
+m2_ctrl_df <- read_tsv(slfile("m2-sampled-track_01.tab"))
+bp_ctrl_df <- bind_rows(hb_ctrl_df, m2_ctrl_df)
+
+# true distances
+bp_df <- bind_rows(hb_df %>% mutate(TYPE="haploid"),
+                   m2_df %>% mutate(TYPE="m2 diploid"))
+
+bp_distance_df <- map_df(set_names(unique(bp_df$TYPE)), function(type) {
+  map_df(set_names(setdiff(unique(bp_df$CHROM), c("chrX", "chrY"))), function(chr) {
+    chr_df <- filter(bp_df, CHROM == chr & TYPE == type)
+    map_df(set_names(unique(chr_df$CELL_ID)), function(cell) {
+      cc_df <- filter(chr_df, CELL_ID == cell)
+      if (nrow(cc_df) < 2) return(NULL)
+      dists <- c()
+      for (i in seq_len(nrow(cc_df) - 1)) {
+        for (j in (i + 1):(nrow(cc_df))) {
+          dists <- c(dists, bp_distance(cc_df[[i, "START"]], cc_df[[i, "END"]], cc_df[[j, "START"]], cc_df[[j, "END"]]))
+        }
+      }
+      return(tibble(DISTANCE=dists))
+    }, .id="CELL_ID")
+  }, .id="CHROM")
+}, .id="TYPE")
+
+bp_distance_df_for_plot <- bp_distance_df %>%
+  mutate(CHROM="ALL") %>%
+  bind_rows(bp_distance_df)
+
+bp_distance_df_for_plot$CHROM <- factor(bp_distance_df_for_plot$CHROM, levels=c(chr_levels, "ALL"))
+
+# null distribution of distances
+sizes <- table(bp_distance_df$CHROM)
+bp_ctrl_distance_df <- map_df(names(sizes), function(c) {
+  choices <- bp_ctrl_df %>%
+    filter(CHROM == c)
+  idx1 <- sample(seq_len(nrow(choices)))
+  idx2 <- sample(seq_len(nrow(choices)))
+  ret <- tibble()
+  sampled_size <- 0
+  while (sampled_size < sizes[c]) {
+    sampled_choices <- bind_cols(choices[idx1, ], choices[idx2, ]) %>%
+    filter((START < START1 & END < START1) | (START > END1 & START > START1)) %>%
+    rowwise() %>%
+    mutate(DISTANCE=bp_distance(START, END, START1, END1))
+    ret <- distinct(bind_rows(ret, sampled_choices))
+    ret <- filter(ret, DISTANCE > 1e5) # min_block size in call_state_block is 1e5 so
+    sampled_size <- nrow(ret)
+  }
+  return(ret[1:sizes[c], ])
+})
+
+bp_ctrl_distance_df_for_plot <- bind_rows(bp_ctrl_distance_df %>% mutate(CHROM="ALL"),
+                                          bp_ctrl_distance_df)
+
+p <- bind_rows(bp_distance_df_for_plot %>% mutate(TYPE=case_when(TYPE=="haploid" ~ "Haploid", TYPE=="m2 diploid" ~ "M2 diploid")),
+               bp_ctrl_distance_df_for_plot %>% mutate(TYPE="Expected")) %>%
+  mutate(CHROM=factor(CHROM, levels=c(chr_levels, "ALL"))) %>%
+  # filter(CHROM %in% c("chr1", "chr2", "chr12", "chr13")) %>% # uncomment if fig 3e
+  ggplot(aes(DISTANCE / 1e6, fill=TYPE)) +
+  geom_histogram(position="dodge", bins=20) +
+  scale_fill_manual(name="", values=c("Haploid"="orangered", "M2 diploid"="dodgerblue", "Expected"="grey80")) +
+  facet_wrap(~CHROM, scales="free") +
+  xlab("Distance between break points (M)") +
+  ylab("Count") +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p
+if (!is.na(fig_dir)) ggsave("figS5C.pdf", p, "pdf", fig_dir, width=8, height=4) 
+```
+
+```{r}
+p <- bind_rows(bp_distance_df_for_plot %>% mutate(TYPE=case_when(TYPE=="haploid" ~ "Haploid", TYPE=="m2 diploid" ~ "M2 diploid")),
+               bp_ctrl_distance_df_for_plot %>% mutate(TYPE="Expected")) %>%
+  mutate(CHROM=factor(CHROM, levels=c(chr_levels, "ALL"))) %>%
+  filter(CHROM %in% c("chr1", "chr2", "chr12", "chr13")) %>% # uncomment if fig 3e
+  ggplot(aes(DISTANCE / 1e6, fill=TYPE)) +
+  geom_histogram(position="dodge", bins=20) +
+  scale_fill_manual(name="", values=c("Haploid"="orangered", "M2 diploid"="dodgerblue", "Expected"="grey80")) +
+  facet_wrap(~CHROM, scales="free") +
+  xlab("Distance between break points (M)") +
+  ylab("Count") +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p
+if (!is.na(fig_dir)) ggsave("fig3E.pdf", p, "pdf", fig_dir, width=5, height=4)
+```
+
+# Proportion of mitochodria reads
+
+## Fig 4H and Fig S5G
+
+```{r, fig.width=6, fig.height=4}
+all_spret_cell_status <- read_tsv(slfile("all.cellstatus.spret.tab"), col_names=c("CELL_ID", "CELL_STATUS", "B", "C"))
+mt_spret_prop_df <- read_tsv(slfile("all.MT.prop.summary.spret.tab"), col_names=c("CELL_ID", "PROP_MT"))
+
+mt_prop_cell_status <- left_join(mt_spret_prop_df, all_spret_cell_status, by="CELL_ID") %>%
+  mutate(CELL_STATUS=case_when(CELL_ID %in% m2_spret_df$CELL_ID ~ "M2 diploid",
+                               CELL_ID %in% hb_spret_df$CELL_ID ~ "Haploid",
+                               TRUE ~ "Other diploid/4C"))
+
+mt_prop_m2d_status <- mt_prop_cell_status %>%
+  filter(CELL_STATUS == "M2 diploid") %>%
+  mutate(CELL_STATUS=case_when(CELL_ID %in% filter(all_m2_merge, TYPE == "Meiotic cell")$CELL_ID ~ "M2 diploid (reductional)",
+                               CELL_ID %in% filter(all_m2_merge, TYPE == "Mitotic cell")$CELL_ID ~ "M2 diploid (equational)",
+                               TRUE ~ "M2 diploid (other)"))
+
+mt_prop_m2d_status_cor <- mt_prop_m2d_status %>% left_join(all_m2_merge) 
+r <- cor.test(mt_prop_m2d_status_cor$PROP_MT, mt_prop_m2d_status_cor$SUM_m2_me, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+sum(all_m2_merge$TYPE=="Mitotic cell")
+sum(all_m2_merge$TYPE=="Meiotic cell")
+
+
+cell_status_levels <- c("Haploid", "M2 diploid", "Other diploid/4C", "M2 diploid (reductional)", "M2 diploid (equational)", "M2 diploid (other)")
+
+p <- ggplot(bind_rows(mt_prop_cell_status, mt_prop_m2d_status) %>% mutate(CELL_STATUS=factor(CELL_STATUS, levels=cell_status_levels)), aes(PROP_MT + 0.1)) +
+  geom_histogram(bins=50) +
+  scale_x_log10(limits=c(0.05, max(mt_prop_cell_status$PROP_MT))) +
+  facet_wrap(~CELL_STATUS, scales='free', nrow=2) +
+  xlab("Proportion of mitochondria reads (normalized)") +
+  ylab("Count") +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p
+if (!is.na(fig_dir)) ggsave("fig4H_S5E.pdf", p, "pdf", fig_dir, width=5.5, height=3.5)
+```
+
+## Fig S6H
+
+```{r, fig.width=6, fig.height=4}
+all_cast_cell_status <- read_tsv("/Users/yiyin/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/cast/all.cellstatus.cast.tab", col_names=c("CELL_ID", "CELL_STATUS", "B", "C"))
+mt_cast_prop_df <- read_tsv("/Users/yiyin/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/cast/all.MT.prop.summary.cast.tab", col_names=c("CELL_ID", "PROP_MT"))
+all_m2_merge_cast <- read_tsv("/Users/yiyin/Desktop/ShendureLab/0000done/sci-LIANTI_manuscript/mouse_meiosis/important_bkp/cast/all_m2_merge.cast.tab")
+
+mt_cast_prop_df_nonZero <- mt_cast_prop_df %>%
+  filter(PROP_MT!=0)
+
+
+mt_prop_cell_status <- left_join(mt_cast_prop_df, all_cast_cell_status, by="CELL_ID") %>%
+  mutate(CELL_STATUS=case_when(CELL_ID %in% m2_cast_df$CELL_ID ~ "M2 diploid",
+                               CELL_ID %in% hb_cast_df$CELL_ID ~ "Haploid",
+                               TRUE ~ "Other diploid/4C"))
+
+mt_prop_m2d_status <- mt_prop_cell_status %>%
+  filter(CELL_STATUS == "M2 diploid") %>%
+  mutate(CELL_STATUS=case_when(CELL_ID %in% filter(all_m2_merge_cast, TYPE == "Meiotic cell")$CELL_ID ~ "M2 diploid (reductional)",
+                               CELL_ID %in% filter(all_m2_merge_cast, TYPE == "Mitotic cell")$CELL_ID ~ "M2 diploid (equational)",
+                               TRUE ~ "M2 diploid (other)"))
+
+mt_prop_m2d_status_cor <- mt_prop_m2d_status %>% left_join(all_m2_merge) 
+r <- cor.test(mt_prop_m2d_status_cor$PROP_MT, mt_prop_m2d_status_cor$SUM_m2_me, method="pearson", exact=TRUE)
+cat("pearson r:\n", r$estimate, "\np-value:\n", r$p.value, "\n")
+
+sum(all_m2_merge_cast$TYPE=="Mitotic cell")
+sum(all_m2_merge_cast$TYPE=="Meiotic cell")
+
+
+cell_status_levels <- c("Haploid", "M2 diploid", "Other diploid/4C", "M2 diploid (reductional)", "M2 diploid (equational)", "M2 diploid (other)")
+
+p <- ggplot(bind_rows(mt_prop_cell_status, mt_prop_m2d_status) %>% mutate(CELL_STATUS=factor(CELL_STATUS, levels=cell_status_levels)), aes(PROP_MT + 0.1)) +
+  geom_histogram(bins=50) +
+  scale_x_log10(limits=c(0.05, max(mt_prop_cell_status$PROP_MT))) +
+  facet_wrap(~CELL_STATUS, scales='free', nrow=2) +
+  xlab("Proportion of mitochondria reads (normalized)") +
+  ylab("Count") +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p
+if (!is.na(fig_dir)) ggsave("figS6H.pdf", p, "pdf", fig_dir, width=5.5, height=3.5)
+```
+
+# Paski cells
+
+```{r}
+lib202_upd <- read_tsv(slfile("lib202_upd.tab"))
+```
+
+## Fig S5F
+
+```{r, fig.width=6, fig.height=2}
+# draw this for ref, alt and other
+df <- lib202_upd %>%
+  count(CHROM, UPD_STATUS) %>%
+  filter(!CHROM %in% c("chr4", "chrX", "chrY")) %>%
+  mutate(CHROM=as.numeric(gsub("chr", "", CHROM))) %>%
+  mutate(UPD_STATUS=case_when(UPD_STATUS == "REF" ~ "B6",
+                              UPD_STATUS == "ALT" ~ "Spret",
+                              UPD_STATUS == "OTHER" ~ "Other")) %>%
+  filter(UPD_STATUS != "Other")
+
+p <- bind_rows(df %>% mutate(UPD_STATUS="B6 + Spret"),
+               df) %>%
+  mutate(UPD_STATUS=factor(UPD_STATUS, levels=c("B6", "Spret", "B6 + Spret"))) %>%
+  ggplot(aes(CHROM, n)) +
+  geom_bar(stat='identity') +
+  facet_wrap(~UPD_STATUS, scales="free_y") +
+  xlab("Chromosome") +
+  ylab("# of cells") +
+  scale_x_continuous(breaks=c(1, 5, 10, 15, 19)) +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p
+if (!is.na(fig_dir)) ggsave("figS5D1.pdf", p, "pdf", fig_dir, width=5, height=2)
+```
+
+## Fig 4I
+
+chromosome distribution for “reverse segregation” (for all TYPE=“Meiotic cell” defined in “all_m2_merge”, sum up SEGREGATION=“mt” in m2_spret_df and STRAIN=“het” in m2_spret_upd, aggregate by chromosome, generate a df similar to “all_upd_chr_dist_m2", call it “meiotic_rev_chr_dist_m2_spret”, plot it the same way as Fig.4G[previous Fig.3G]); same for cast.
+
+```{r}
+# for spret
+rev_cell_spret_ids <- filter(all_m2_merge, TYPE == "Meiotic cell")$CELL_ID
+meiotic_rev_chr_dist_m2_spret <- m2_spret_df %>%
+  filter(SEGREGATION == "mt") %>%
+  distinct(CELL_ID, CHROM) %>%
+  bind_rows(m2_spret_upd %>%
+  filter(STRAIN == "het")) %>%
+  filter(CELL_ID %in% rev_cell_spret_ids) %>%
+  count(CHROM) %>%
+  mutate(CHROM=as.integer(gsub("chr", "", CHROM)))
+  
+p_spret <- ggplot(meiotic_rev_chr_dist_m2_spret, aes(CHROM, n)) +
+  geom_bar(stat='identity') +
+  xlab("Chromosome") +
+  ylab("# of cells") +
+  scale_x_continuous(breaks=c(1, 5, 10, 15, 19)) +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+# for cast
+rev_cell_cast_ids <- filter(all_m2_merge_cast, TYPE == "Meiotic cell")$CELL_ID
+meiotic_rev_chr_dist_m2_cast <- m2_cast_df %>%
+  filter(SEGREGATION == "mt") %>%
+  distinct(CELL_ID, CHROM) %>%
+  bind_rows(m2_cast_upd %>%
+  filter(STRAIN == "het")) %>%
+  filter(CELL_ID %in% rev_cell_cast_ids) %>%
+  count(CHROM) %>%
+  mutate(CHROM=as.integer(gsub("chr", "", CHROM)))
+  
+p_cast <- ggplot(meiotic_rev_chr_dist_m2_cast, aes(CHROM, n)) +
+  geom_bar(stat='identity') +
+  xlab("Chromosome") +
+  ylab("# of cells") +
+  scale_x_continuous(breaks=c(1, 5, 10, 15, 19)) +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p_spret
+p_cast
+if (!is.na(fig_dir)) {
+  pdf(file.path(fig_dir, "fig4I.pdf"), 2, 1.5)
+  print(p_spret)
+  print(p_cast)
+  dev.off()
+}
+```
+
+```{r, fig.width=6, fig.height=2}
+# similar plot, separating mt, me, mt + me this time
+df <- read_tsv(slfile("patski.mb.tab")) %>%
+  count(CHROM, SEGREGATION) %>%
+  filter(!CHROM %in% c("chr4", "chrX", "chrY")) %>%
+  mutate(CHROM=as.numeric(gsub("chr", "", CHROM))) %>%
+  mutate(SEGREGATION=case_when(SEGREGATION == "mt" ~ "Mitotic",
+                               SEGREGATION == "me" ~ "Meiotic"))
+
+p <- bind_rows(df %>% mutate(SEGREGATION="All LOH"),
+               df) %>%
+  mutate(SEGREGATION=factor(SEGREGATION, levels=c("Mitotic", "Meiotic", "All LOH"))) %>%
+  ggplot(aes(CHROM, n)) +
+  geom_bar(stat='identity') +
+  facet_wrap(~SEGREGATION, scales="free_y") +
+  xlab("Chromosome") +
+  ylab("# of cells") +
+  scale_x_continuous(breaks=c(1, 5, 10, 15, 19)) +
+  theme_classic() +
+  theme(strip.background = element_blank())
+
+p
+if (!is.na(fig_dir)) ggsave("figS5D2.pdf", p, "pdf", fig_dir, width=5, height=2)
+```
+
+# Karyotype plots
+
+## Fig 5A
+
+```{r, fig.height=10, fig.width=10}
+spo11_df = read_tsv(slfile("spo11_b6_and_spret.tab")) %>% distinct()
+spo11 <- makeGRangesFromDataFrame(data.frame(chr=spo11_df$CHROM, start=spo11_df$START, end=spo11_df$END))
+bp <- makeGRangesFromDataFrame(data.frame(
+  bind_rows(hb_spret_df, m2_spret_df) %>%
+    dplyr::rename(chr=CHROM, start=START, end=END) %>% dplyr::select(chr, start, end)))
+bp_hap <- makeGRangesFromDataFrame(data.frame(
+  hb_spret_df %>%
+    dplyr::rename(chr=CHROM, start=START, end=END) %>% dplyr::select(chr, start, end)))
+bp_m2 <- makeGRangesFromDataFrame(data.frame(
+  m2_spret_df %>%
+    dplyr::rename(chr=CHROM, start=START, end=END) %>% dplyr::select(chr, start, end)))
+
+kp <- plotKaryotype(genome="mm10", chromosomes=paste0("chr", as.character(1:19)))
+kpPlotCoverage(kp, bp_m2, col="green", r0=0, r1=0.24)
+kpPlotCoverage(kp, bp_hap, col="purple", r0=0.25, r1=0.49)
+kpPlotCoverage(kp, bp, col="orangered", r0=0.5, r1=0.74)
+kpPlotDensity(kp, spo11, col="dodgerblue", r0=0.75, r1=0.99)
+
+if (!is.na(fig_dir)) {
+  pdf(file.path(fig_dir, "fig5A.pdf"), 10, 15)
+  kp <- plotKaryotype(genome="mm10", chromosomes=paste0("chr", as.character(1:19)))
+  kpPlotCoverage(kp, bp_m2, col="green", r0=0, r1=0.24)
+  kpPlotCoverage(kp, bp_hap, col="purple", r0=0.25, r1=0.49)
+  kpPlotCoverage(kp, bp, col="orangered", r0=0.5, r1=0.74)
+  kpPlotDensity(kp, spo11, col="dodgerblue", r0=0.75, r1=0.99)
+  dev.off()
+}
+```
+
+## Fig S7
+
+```{r, fig.height=10, fig.width=10}
+spo11_all_df <- read_tsv(slfile("B6.Spo11.withHits.txt")) %>%
+  dplyr::select(chr, Start, End, Hits) %>%
+  dplyr::rename(CHROM=chr, START=Start, END=End, SPO11=Hits)
+spo11_all <- makeGRangesFromDataFrame(data.frame(chr=spo11_all_df$CHROM, start=spo11_all_df$START, end=spo11_all_df$END))
+kp <- plotKaryotype(genome="mm10", chromosomes=paste0("chr", as.character(1:19)))
+kpPlotCoverage(kp, bp_m2, col="green", r0=0, r1=0.24)
+kpPlotCoverage(kp, bp_hap, col="purple", r0=0.25, r1=0.49)
+kpPlotCoverage(kp, bp, col="orangered", r0=0.5, r1=0.74)
+kpPlotDensity(kp, spo11_all, col="dodgerblue", r0=0.75, r1=0.99)
+
+if (!is.na(fig_dir)) {
+  pdf(file.path(fig_dir, "figS7.pdf"), 10, 8)
+  kp <- plotKaryotype(genome="mm10", chromosomes=paste0("chr", as.character(1:19)))
+  kpPlotCoverage(kp, bp_m2, col="green", r0=0, r1=0.24)
+  kpPlotCoverage(kp, bp_hap, col="purple", r0=0.25, r1=0.49)
+  kpPlotCoverage(kp, bp, col="orangered", r0=0.5, r1=0.74)
+  kpPlotDensity(kp, spo11_all, col="dodgerblue", r0=0.75, r1=0.99)
+  dev.off()
+}
+```
+
+## Fig S8
+
+```{r, fig.height=10, fig.width=10}
+spo11_all_df <- read_tsv(slfile("B6.Spo11.withHits.txt")) %>%
+  dplyr::select(chr, Start, End, Hits) %>%
+  dplyr::rename(CHROM=chr, START=Start, END=End, SPO11=Hits)
+spo11_all <- makeGRangesFromDataFrame(data.frame(chr=spo11_all_df$CHROM, start=spo11_all_df$START, end=spo11_all_df$END))
+
+bp <- makeGRangesFromDataFrame(data.frame(
+  bind_rows(hb_cast_df, m2_cast_df) %>%
+    dplyr::rename(chr=CHROM, start=START, end=END) %>% dplyr::select(chr, start, end)))
+bp_hap <- makeGRangesFromDataFrame(data.frame(
+  hb_cast_df %>%
+    dplyr::rename(chr=CHROM, start=START, end=END) %>% dplyr::select(chr, start, end)))
+bp_m2 <- makeGRangesFromDataFrame(data.frame(
+  m2_cast_df %>%
+    dplyr::rename(chr=CHROM, start=START, end=END) %>% dplyr::select(chr, start, end)))
+
+kp <- plotKaryotype(genome="mm10", chromosomes=paste0("chr", as.character(1:19)))
+kpPlotCoverage(kp, bp_m2, col="green", r0=0, r1=0.24)
+kpPlotCoverage(kp, bp_hap, col="purple", r0=0.25, r1=0.49)
+kpPlotCoverage(kp, bp, col="orangered", r0=0.5, r1=0.74)
+kpPlotDensity(kp, spo11_all, col="dodgerblue", r0=0.75, r1=0.99)
+
+if (!is.na(fig_dir)) {
+  pdf(file.path(fig_dir, "figS8.pdf"), 10, 8)
+  kp <- plotKaryotype(genome="mm10", chromosomes=paste0("chr", as.character(1:19)))
+  kpPlotCoverage(kp, bp_m2, col="green", r0=0, r1=0.24)
+  kpPlotCoverage(kp, bp_hap, col="purple", r0=0.25, r1=0.49)
+  kpPlotCoverage(kp, bp, col="orangered", r0=0.5, r1=0.74)
+  kpPlotDensity(kp, spo11_all, col="dodgerblue", r0=0.75, r1=0.99)
+  dev.off()
+}
+```
+
+# Break features
+
+## Break size distribution, Fig 6A
+
+```{r}
+p <- ggplot(bind_rows(hb_cast_df, m2_cast_df) %>% mutate(DISTANCE=DISTANCE / 1e3), aes(DISTANCE)) +
+  geom_histogram(binwidth=0.1) +
+  scale_x_log10(labels=scales::format_format(scientific = FALSE, digits=0)) +
+  xlab("Break point size (kb)") +
+  ylab("Count") +
+  theme_classic() +
+  theme(axis.text = element_text(hjust = 1))
+
+p
+if (!is.na(fig_dir)) ggsave("fig6A_cast.pdf", p, "pdf", fig_dir, width=2.5, height=2.5)
+```
+
+Load features...
+
+```{r}
+load(slfile("features.rda"))
+```
+
+## BAS, Fig 4B
+
+```{r, fig.width=10, fig.height=10}
+window_data <- window_with_cor %>%
+  dplyr::select(-c(CHROM, START, END, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75)) %>%
+  mutate_if(sapply(., is.character), function(x) {ifelse(x == "Yes", 1, 0)})
+dt <- window_data[!grepl("event_", colnames(window_data)) | colnames(window_data) == "event_hp_m2"]
+set.seed(0)
+window_bas <- bas.lm(event_hp_m2 ~ ., data=as.data.frame(dt), n.models=2^11, method='BAS')
+p <- bas_plot(window_bas)
+if (!is.na(fig_dir)) ggsave("fig4B.pdf", p, "pdf", fig_dir, width=8, height=9)
+```
+
+## PCA, Fig 5B
+
+```{r}
+cell_pca <- prcomp((cell_df_with_cor[-(1:2)]), scale.=T)
+```
+
+```{r, fig.width=4, fig.height=3}
+plot_cell_pca_simp <- function(cell_pca, cell_df) {
+  s <- summary(cell_pca)
+  s1 <- s$importance["Proportion of Variance", "PC1"] * 100
+  s2 <- s$importance["Proportion of Variance", "PC2"] * 100
+  cell_pca_df <- cell_df %>%
+    mutate(PC1=cell_pca$x[, "PC1"],
+           PC2=cell_pca$x[, "PC2"]) %>%
+    mutate(TYPE=R.utils::capitalize(TYPE))
+  
+  p <- ggplot(cell_pca_df, aes(PC1, PC2)) +
+      geom_point(aes(color=TYPE), alpha=0.4) +
+      scale_color_manual(values=c("Haploid"="dodgerblue", "M2 diploid"="orangered"), name="") +
+      xlab(sprintf("PC1 (%1.2f%%)", s1)) +
+      ylab(sprintf("PC2 (%1.2f%%)", s2)) +
+      theme_classic()
+  return(p)
+}
+
+p <- plot_cell_pca_simp(cell_pca, cell_df_with_cor)
+p
+if (!is.na(fig_dir)) ggsave("figS5B.pdf", p, "pdf", fig_dir, width=4, height=3)
+```
+
+## PCA, Fig S8
+
+```{r, fig.width=30, fig.height=30}
+# ignore these cols from plot
+
+exclude_cols <- c("chr1_bp","chr2_bp","chr4_bp","chr5_bp","chr6_bp","chr7_bp","chr8_bp","chr9_bp","chr10_bp","chr11_bp","chr12_bp","chr13_bp","chr14_bp","chr15_bp","chr16_bp","chr17_bp","chr18_bp","chr19_bp","chr2_upd","chr3_upd","chr4_upd","chr5_upd","chr6_upd","chr7_upd","chr8_upd","chr9_upd","chr10_upd","chr11_upd","chr12_upd","chr13_upd","chr14_upd","chr15_upd","chr16_upd","chr17_upd","chr18_upd","chr19_upd","CENTROMERIC","QUANTILE_25_75_FLAG","QUANTILE_75_100_FLAG","CNV_SPRET_GAIN","GC","SEQUENCE_DIVERGENCE","H3K4ME1","PS_H2AUB","PATSKI_POLIIS5P_B6_SUMMITS","PATSKI_POLIIS5P_SPRET_SUMMITS","P7GONIA","PS_MNASE_NUC","PS_5MC","PS_BS","THREE_PRIME_UTR","FIVE_PRIMER_UTR","NCRNA","PSEUDOGENIC_TRANSCRIPT","RRNA","SNRNA_SNORNA","RMSK_DNA","RMSK_LINE","RMSK_LTR","RMSK_LC","RMSK_RC","RMSK_RNA","RMSK_SINE","RMSK_SATE","RMSK_SIMPLE_REPEAT","RMSK_RRNA","RMSK_SCRNA","RMSK_SNRNA","RMSK_SRPRNA","RMSK_TRNA","SEG_DUP","KAC")
+
+do.call("grid.arrange", c(plot_cell_pca(cell_pca, cell_df_with_cor[!names(cell_df_with_cor) %in% exclude_cols]), nrow=6))
+
+if (!is.na(fig_dir)) {
+  png(file.path(fig_dir, "FigS8.png"), 3800, 2800, res=170)
+  do.call("grid.arrange", c(plot_cell_pca(cell_pca, cell_df_with_cor[!names(cell_df_with_cor) %in% exclude_cols]), nrow=6))
+  dev.off()
+}
+```
+
+## Correlation among features, Fig S7
+
+```{r, fig.width=12, fig.height=12}
+window_features_for_cor <- window_with_cor %>%
+  dplyr::select(-c(CHROM, START, END, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75)) %>%
+  mutate_if(sapply(., is.character), function(x) {ifelse(x == "Yes", 1, 0)})
+
+window_features_cor <- cor(window_features_for_cor, use='pairwise.complete.obs', method='spearman')
+window_features_order <- corrplot::corrMatOrder(window_features_cor[1:78, 1:78], order = "hclust", hclust.method = "complete")
+window_features_order <- c(c(79:83), window_features_order) # put responses on topleft
+
+corrplot::corrplot(window_features_cor[window_features_order, window_features_order], tl.cex=0.5, type="upper", method="color", tl.col=c(rep("red", 5), rep("steelblue", 78)))
+
+if (!is.na(fig_dir)) {
+  pdf(file.path(fig_dir, "figS7.pdf"), 10, 10)
+  corrplot::corrplot(window_features_cor[window_features_order, window_features_order], tl.cex=0.5, type="upper", method="color", tl.col=c(rep("red", 5), rep("steelblue", 78)))
+  dev.off()
+}
+```
+
+## Random forest, not run
+
+Don't run unless you are prepared to wait for days... This chunk runs nested cross validation for random forests model.
+
+```{r, eval=FALSE}
+library(BiocParallel)
+library(caret)
+library(pROC)
+
+md_data <- bind_rows(hb_df_with_cor %>% add_column(RESPONSE="Y", TYPE="hp", .before=1),
+                     m2_df_with_cor %>% add_column(RESPONSE="Y", TYPE="m2", .before=1),
+                     hb_ctrl_with_cor %>% add_column(RESPONSE="N", TYPE="hp", .before=1),
+                     m2_ctrl_with_cor %>% add_column(RESPONSE="N", TYPE="m2", .before=1)) %>%
+  select(-c(CELL_ID, CHROM, START, END, SCORE, STRAND, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75, NOTE, SEGREGATION)) # %>%
+  drop_na()
+
+ncv_list <- bplapply(1:5, function(x) {
+  train_n <- round(nrow(md_data) * 0.9)
+  train_idx <- sample(1:nrow(md_data), size=train_n, replace=FALSE)
+  train_df <- md_data[train_idx, ]
+  train_df$RESPONSE <- factor(train_df$RESPONSE)
+  test_df <- md_data[-train_idx, ]
+  train_control <- trainControl(method = "cv", number = 5, returnResamp = "all",
+                                classProbs = TRUE, 
+                                summaryFunction = twoClassSummary)
+  model_weights <- ifelse(train_df$RESPONSE == "Y",
+                          (1/table(train_df$RESPONSE)["Y"]) * 0.5,
+                          (1/table(train_df$RESPONSE)["N"]) * 0.5)
+  md <- train(RESPONSE ~ ., data = train_df, 
+              method = "rf", 
+              trControl = train_control,
+              weights = model_weights,
+              metric = "ROC")
+  pred <- predict(md, newdata=test_df, type = "prob")
+  pred_df <- tibble(truth=test_df$RESPONSE, pred=pred$Y)
+  return(pred_df)
+})
+
+ncv_df <- bind_rows(ncv_list)
+rf_roc_obj <- roc(ncv_df$truth, ncv_df$pred)
+```
+
+ROC and AUC from pre-generated random forests
+
+```{r}
+p <- ggplot(tibble(Sensitivity=rf_roc_obj$sensitivities, Specificity=rf_roc_obj$specificities), aes(Specificity, Sensitivity)) +
+  geom_segment(x=0, y=1, xend=-1, yend=0, color="grey50", size=1) +
+  geom_line(color="orangered", size=1) +
+  xlim(1, 0) +
+  ylim(0, 1) +
+  theme_classic()
+
+p
+if (!is.na(fig_dir)) ggsave("fig5C.pdf", p, "pdf", fig_dir, width=2.5, height=2.3)
+```

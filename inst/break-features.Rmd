@@ -1,0 +1,1545 @@
+---
+title: "Process break features"
+author: "Yue"
+date: "8/19/2018"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(caret)
+library(pROC)
+library(BiocParallel)
+```
+
+# Load break points and controls
+
+```{r}
+window_df <- read_tsv("~/Desktop/sci-lianti-files/mm10.window.noXY.bed", col_names=c("CHROM", "START", "END"))
+window_gc <- read_tsv("~/Desktop/sci-lianti-files/mm10.window.noXY.gc.txt")
+mm10_fai_df <- read_tsv("~/Desktop/sci-lianti-files/mm10.fa.fai", col_names=c("CHROM", "CHROM_SIZE", "BI", "BASES_PER_LINE", "BYTES_PER_LINE"))
+```
+
+## Spret
+
+```{r}
+hb_spret_df <- read_tsv(slfile("haploid.no0.hb.filtered.spret.tab"))
+hb_spret_gc <- read_tsv("~/Desktop/sci-lianti-files/features/spret/haploid.spret.final.extended10b.gc.txt")
+
+ctrl_spret_df <- read_tsv("~/Desktop/sci-lianti-files/features/spret/sample.srt.bed", col_names=c("CHROM", "START", "END", "TYPE"))
+ctrl_spret_gc <- read_tsv("~/Desktop/sci-lianti-files/features/spret/sample.srt.gc.txt")
+
+hb_ctrl_spret_df <- filter(ctrl_spret_df, TYPE == "hp") %>% dplyr::select(-TYPE)
+hb_ctrl_spret_gc <- ctrl_spret_gc[which(ctrl_spret_df$TYPE == "hp"), ]
+
+m2_spret_df <- read_tsv(slfile("m2diploid.concensus.mb.spret.tab"))
+m2_spret_gc <- read_tsv("~/Desktop/sci-lianti-files/features/spret/m2.spret.final.extended10b.gc.txt")
+
+m2_ctrl_spret_df <- filter(ctrl_spret_df, TYPE == "m2") %>% dplyr::select(-TYPE)
+m2_ctrl_spret_gc <- ctrl_spret_gc[which(ctrl_spret_df$TYPE == "m2"), ]
+```
+
+## Cast
+
+```{r}
+hb_cast_df <- read_tsv(slfile("haploid.no0.hb.filtered.cast.tab"))
+hb_cast_gc <- read_tsv("~/Desktop/sci-lianti-files/features/cast/haploid_crossover.extended10b.gc.txt")
+
+ctrl_cast_df <- read_tsv("~/Desktop/sci-lianti-files/features/cast/sample.srt.bed", col_names=c("CHROM", "START", "END", "TYPE"))
+ctrl_cast_gc <- read_tsv("~/Desktop/sci-lianti-files/features/cast/sample.srt.gc.txt")
+
+hb_ctrl_cast_df <- filter(ctrl_cast_df, TYPE == "hp") %>% dplyr::select(-TYPE)
+hb_ctrl_cast_gc <- ctrl_cast_gc[which(ctrl_cast_df$TYPE == "hp"), ]
+
+m2_cast_df <- read_tsv(slfile("m2diploid.concensus.mb.cast.tab"))
+m2_cast_gc <- read_tsv("~/Desktop/sci-lianti-files/features/cast/m2.cast.final.extended10b.gc.txt")
+
+m2_ctrl_cast_df <- filter(ctrl_cast_df, TYPE == "m2") %>% dplyr::select(-TYPE)
+m2_ctrl_cast_gc <- ctrl_cast_gc[which(ctrl_cast_df$TYPE == "m2"), ]
+```
+
+# Load features
+
+## Spret
+
+### Spret features to join by overlap
+
+```{r}
+spret_features <- list(
+  # SPO11 = read_tsv("~/Desktop/sci-lianti-files/features/B6.Spo11.withHits.txt") %>%
+  #   dplyr::select(chr, Start, End, Hits) %>%
+  #   dplyr::rename(CHROM=chr, START=Start, END=End, SPO11=Hits),
+  SPO11_BOTH = distinct(read_tsv("~/Desktop/sci-lianti-files/features/spo11_b6_and_spret.tab")),
+  SPO11_B6 = distinct(read_tsv("~/Desktop/sci-lianti-files/features/spo11_b6_only.tab")),
+  SPO11_SPRET = distinct(read_tsv("~/Desktop/sci-lianti-files/features/spo11_spret_only.tab")),
+  SPO11_OTHER = distinct(read_tsv("~/Desktop/sci-lianti-files/features/spo11_other.tab")),
+  
+  CNV_SPRET_GAIN = read_tsv("~/Desktop/sci-lianti-files/features/CNV_SPRE_gain.bed", skip=1, col_names=c("CHROM", "START", "END", "CNV_SPRET_GAIN")),
+  
+  CNV_SPRET_LOSS = read_tsv("~/Desktop/sci-lianti-files/features/CNV_SPRE_loss.bed", skip=1, col_names=c("CHROM", "START", "END", "CNV_SPRET_LOSS")) %>%
+    mutate(CNV_SPRET_LOSS=-CNV_SPRET_LOSS),
+  
+  THREE_PRIME_UTR = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.UTR3.bed"),
+  
+  FIVE_PRIME_UTR = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.UTR5.bed"),
+  
+  GENE = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.gene.bed"),
+  
+  LNC_RNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.lnc_RNA.bed"),
+  
+  NCRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.ncRNA.bed"),
+  
+  PSEUDOGENIC_TRANSCRIPT = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.pseudogenic_transcript.bed"),
+  
+  RRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.rRNA.bed"),
+  
+  SNRNA_SNORNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.snRNA_snoRNA.bed"),
+  
+  RMSK_DNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.DNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_DNA=1),
+  
+  RMSK_LINE = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.LINE.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_LINE=1),
+  
+  RMSK_LTR = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.LTR.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_LTR=1),
+  
+  RMSK_LC = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.Low_complexity.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_LC=1),
+  
+  RMSK_RC = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.RC.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_RC=1),
+  
+  RMSK_RNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.RNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_RNA=1),
+  
+  RMSK_SINE = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.SINE.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SINE=1),
+  
+  RMSK_SATE = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.Satellite.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SATE=1),
+  
+  RMSK_SIMPLE_REPEAT = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.Simple_repeat.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SIMPLE_REPEAT=1),
+  
+  RMSK_RRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.rRNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_RRNA=1),
+  
+  RMSK_SCRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.scRNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SCRNA=1),
+  
+  RMSK_SNRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.snRNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SNRNA=1),
+  
+  RMSK_SRPRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.srpRNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SRPRNA=1),
+  
+  RMSK_TRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.tRNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_TRNA=1),
+  
+  SEG_DUP = read_tsv("~/Desktop/sci-lianti-files/features/mm10.segdup.bed", skip=1, col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(SEG_DUP=1),
+  
+  SEQ_DIV_SPRET = read_tsv("~/Desktop/sci-lianti-files/features/SPRET.windowed.pi.bedGraph", col_names=c("CHROM", "START", "END", "SEQ_DIV_SPRET")),
+  
+  CTCF = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_ctcf.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, CTCF=X7),
+  
+  RNA_POL2 = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_RNApol2.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, RNA_POL2=X7),
+  
+  H3K27AC = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_h3k27ac.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, H3K27AC=X7),
+  
+  H3K36ME3 = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_h3k36me3.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, H3K36ME3=X7),
+  
+  H3K4ME1 = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_h3k4me1.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, H3K4ME1=X7),
+  
+  H3K4ME3 = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_h3k4me3.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, H3K4ME3=X7),
+  
+  LONG_RNA_SEQ = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_longRNAseq.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, LONG_RNA_SEQ=X7),
+  
+  DMRT6 = read_tsv("~/Desktop/sci-lianti-files/features/DMRT6/DMRT6.mm10.bed", col_names=c("CHROM", "START", "END", "DMRT6")),
+  
+  H3K27ME3 = read_tsv("~/Desktop/sci-lianti-files/features/h3k27me3/h3k27me3.mm10.merged.bed", col_names=c("CHROM", "START", "END")) %>%
+    mutate(H3K27ME3=1),
+  
+  PS_ATAC= read_tsv("~/Desktop/sci-lianti-files/features/PS_atac_H3K27ac/ps.atac.bed", col_names=c("CHROM", "START", "END", "PS_ATAC")),
+  
+  PS_H3K27AC = read_tsv("~/Desktop/sci-lianti-files/features/PS_atac_H3K27ac/ps.h3k27ac.bed", col_names=c("CHROM", "START", "END", "PS_H3K27AC")),
+  
+  PS_COHESIN = read_tsv("~/Desktop/sci-lianti-files/features/PS_cohesin/PS_cohesin_0.001.mm10.bed", col_names=c("CHROM", "START", "END", "PS_COHESIN")),
+  
+  PS_SMC1B_LAP = read_tsv("~/Desktop/sci-lianti-files/features/PS_cohesin/PS_SMC1B-LAP_0.1.mm10.bed", col_names=c("CHROM", "START", "END", "PS_SMC1B_LAP")),
+  
+  PS_H2AUB = read_tsv("~/Desktop/sci-lianti-files/features/PS_H2Aub/PS_H2Aub.mm10.bed", col_names=c("CHROM", "START", "END", "PS_H2AUB")),
+  
+  H4K5AC = read_tsv("~/Desktop/sci-lianti-files/features/PS_h4mods/h4k5ac.mm10.bed", col_names=c("CHROM", "START", "END", "H4K5AC")),
+  
+  H4K5BU = read_tsv("~/Desktop/sci-lianti-files/features/PS_h4mods/h4k5bu.mm10.bed", col_names=c("CHROM", "START", "END", "H4K5BU")),
+  
+  H4K8AC = read_tsv("~/Desktop/sci-lianti-files/features/PS_h4mods/h4k8ac.mm10.bed", col_names=c("CHROM", "START", "END", "H4K8AC")),
+  
+  H4K8BU = read_tsv("~/Desktop/sci-lianti-files/features/PS_h4mods/h4k8bu.mm10.bed", col_names=c("CHROM", "START", "END", "H4K8BU")),
+  
+  CTCFL = read_tsv("~/Desktop/sci-lianti-files/features/CTCFL/CTCFL.mm10.bed", col_names=c("CHROM", "START", "END")) %>%
+    mutate(CTCFL=1),
+  
+  MESC_REPLI_SEQ = read_tsv("~/Desktop/sci-lianti-files/features/mESC_repli_seq/mESC_repli_seq.mm10.bed", col_names=c("CHROM", "START", "END", "MESC_REPLI_SEQ")),
+  
+  CTCF_B6 = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/CTCF_b6_aB.mm10.bed", col_names=c("CHROM", "START", "END", "CTCF_B6")),
+  
+  CTCF_SPRET = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/CTCF_spret_aB.mm10.bed", col_names=c("CHROM", "START", "END", "CTCF_SPRET")),
+  
+  END_SEQ_B6_ETO = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/end_seq_b6_ETO.mm10.bed", col_names=c("CHROM", "START", "END", "END_SEQ_B6_ETO")),
+  
+  END_SEQ_SPRET_ETO = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/end_seq_spret_ETO.mm10.bed", col_names=c("CHROM", "START", "END", "END_SEQ_SPRET_ETO")),
+  
+  RAD21_B6 = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/RAD21_b6_aB.mm10.bed", col_names=c("CHROM", "START", "END", "RAD21_B6")),
+  
+  RAD21_SPRET = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/RAD21_spret_aB.mm10.bed", col_names=c("CHROM", "START", "END", "RAD21_SPRET")),
+  
+  TOP2A_MEF = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/TOP2A_MEF.mm10.bed", col_names=c("CHROM", "START", "END", "TOP2A_MEF")),
+  
+  TOP2B_MEF = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/TOP2B_MEF.mm10.bed", col_names=c("CHROM", "START", "END", "TOP2B_MEF")),
+  
+  PATSKI_ALLELIC_ATAC_B6 = read_tsv("~/Desktop/sci-lianti-files/features/patski/patski_allelicATAC.mm10.b6.bed", col_names=c("CHROM", "START", "END", "PATSKI_ALLELIC_ATAC_B6")),
+  
+  PATSKI_ALLELIC_ATAC_SPRET = read_tsv("~/Desktop/sci-lianti-files/features/patski/patski_allelicATAC.mm10.spret.bed", col_names=c("CHROM", "START", "END", "PATSKI_ALLELIC_ATAC_SPRET")),
+  
+  PATSKI_ALLELIC_CTCF_B6 = read_tsv("~/Desktop/sci-lianti-files/features/patski/patski_allelicCTCF.mm10.b6.bed", col_names=c("CHROM", "START", "END", "PATSKI_ALLELIC_CTCF_B6")),
+  
+  PATSKI_ALLELIC_CTCF_SPRET = read_tsv("~/Desktop/sci-lianti-files/features/patski/patski_allelicCTCF.mm10.spret.bed", col_names=c("CHROM", "START", "END", "PATSKI_ALLELIC_CTCF_SPRET")),
+  
+  # PATSKI_CTCF_B6_SUMMITS = read_tsv("~/Desktop/sci-lianti-files/features/patski/Patski_ctcf_b6_summits.mm10.bed", col_names=c("CHROM", "START", "END", "NOUSE", "PATSKI_CTCF_B6_SUMMITS")) %>% dplyr::select(-NOUSE),
+  
+  # PATSKI_CTCF_SPRET_SUMMITS = read_tsv("~/Desktop/sci-lianti-files/features/patski/Patski_ctcf_spret_summits.mm10.bed", col_names=c("CHROM", "START", "END", "NOUSE", "PATSKI_CTCF_SPRET_SUMMITS")) %>% dplyr::select(-NOUSE),
+  
+  PATSKI_POLIIS5P_B6_SUMMITS = read_tsv("~/Desktop/sci-lianti-files/features/patski/Patski_PolIIS5p_b6_summits.mm10.bed", col_names=c("CHROM", "START", "END", "NOUSE","PATSKI_POLIIS5P_B6_SUMMITS")) %>%
+    dplyr::select(-NOUSE),
+  
+  PATSKI_POLIIS5P_SPRET_SUMMITS = read_tsv("~/Desktop/sci-lianti-files/features/patski/Patski_PolIIS5p_spret_summits.mm10.bed", col_names=c("CHROM", "START", "END", "NOUSE", "PATSKI_POLIIS5P_SPRET_SUMMITS")) %>%
+    dplyr::select(-NOUSE)
+)
+
+spret_features <- map(spret_features, ~drop_na(.x))
+```
+
+### Spret features to join by simple join
+
+```{r}
+spret_other_features <- list(
+  EVENT = list(
+    P7GONIA = read_tsv("~/Desktop/sci-lianti-files/features/spret/p7gonia_event.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "P7GONIA")),
+    PS_MNASE_NUC = read_tsv("~/Desktop/sci-lianti-files/features/spret/PS_MNase_nuc_mm10_event.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_MNASE_NUC")),
+    PS_5MC_EVENT = read_tsv("~/Desktop/sci-lianti-files/features/spret/PS_5mc_mm10_event.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_5MC")),
+    PS_BS_EVENT = read_tsv("~/Desktop/sci-lianti-files/features/spret/PS_bs_event.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_BS")),
+    KAC_EVENT = read_tsv("~/Desktop/sci-lianti-files/features/spret/Kac_event.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KAC"))
+    # KCRO_EVENT = read_tsv("~/Desktop/sci-lianti-files/features/spret/Kcro_event.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KCRO"))
+  ),
+  CONTROL = list(
+    P7GONIA_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/spret/p7gonia_control.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "P7GONIA")),
+    PS_MNASE_NUC_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/spret/PS_MNase_nuc_mm10_control.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_MNASE_NUC")),
+    PS_5MC_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/spret/PS_5mc_mm10_control.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_5MC")),
+    PS_BS_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/spret/PS_bs_control.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_BS")),
+    KAC_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/spret/Kac_control.spret.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KAC"))
+    # KCRO_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/PS_Kcro/Kcro_control.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KCRO"))
+  ),
+  WINDOW = list(
+    P7GONIA = read_tsv("~/Desktop/sci-lianti-files/features/p7gonia_bs/p7gonia_window.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "P7GONIA")),
+    PS_MNASE_NUC = read_tsv("~/Desktop/sci-lianti-files/features/PS_MNase_nuc/PS_MNase_nuc_mm10_window.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_MNASE_NUC")),
+    PS_5MC = read_tsv("~/Desktop/sci-lianti-files/features/PS_5mC/PS_5mc_mm10_window.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_5MC")),
+    PS_BS = read_tsv("~/Desktop/sci-lianti-files/features/PS_bs/PS_bs_window.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_BS")),
+    KAC = read_tsv("~/Desktop/sci-lianti-files/features/PS_Kcro/Kac_window.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KAC")),
+    # KCRO_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/PS_Kcro/Kcro_window.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KCRO")),
+    event_hp_m2 = read_tsv("~/Desktop/sci-lianti-files/features/event_window.bed", col_names=c("CHROM", "START", "END", "event_hp_m2")),
+    event_hp = read_tsv("~/Desktop/sci-lianti-files/features/haploid_window.spret.bed", col_names=c("CHROM", "START", "END", "event_hp")),
+    event_m2 = read_tsv("~/Desktop/sci-lianti-files/features/m2_window.spret.bed", col_names=c("CHROM", "START", "END", "event_m2")),
+    event_mt = read_tsv("~/Desktop/sci-lianti-files/features/mt_window.spret.bed", col_names=c("CHROM", "START", "END", "event_mt")),
+    event_me = read_tsv("~/Desktop/sci-lianti-files/features/me_window.spret.bed", col_names=c("CHROM", "START", "END", "event_me"))
+  )
+)
+
+spret_other_features <- map(spret_other_features, function(x) {
+  map(x, function(y) {
+    signal_col <- colnames(y)[min(5, ncol(y))]
+    # signal_col <- rlang::sym(colnames(y)[5])
+    if (!is.numeric(y[[signal_col]])) {
+      y[[signal_col]][y[[signal_col]] == '.'] <- '0'
+      y[[signal_col]] <- as.numeric(y[[signal_col]])
+    }
+    y
+  })
+})
+
+spret_other_features_processed <- list(
+  EVENT_HP = map(spret_other_features$EVENT, function(x) {
+    right_join(x, hb_spret_df[c("CELL_ID", "CHROM", "START", "END")])
+  }),
+  EVENT_M2 = map(spret_other_features$EVENT, function(x) {
+    right_join(x, m2_spret_df[c("CELL_ID", "CHROM", "START", "END")])
+  }),
+  CONTROL_HP = map(spret_other_features$CONTROL, function(x) {
+    filter(x, CELL_ID == "hp")
+  }),
+  CONTROL_M2 = map(spret_other_features$CONTROL, function(x) {
+    filter(x, CELL_ID == "m2")
+  }),
+  WINDOW = spret_other_features$WINDOW
+)
+```
+
+## Cast
+
+### Cast features to join by overlap
+
+```{r}
+cast_features <- list(
+  # SPO11 = read_tsv("~/Desktop/sci-lianti-files/features/B6.Spo11.withHits.txt") %>%
+  #   dplyr::select(chr, Start, End, Hits) %>%
+  #   dplyr::rename(CHROM=chr, START=Start, END=End, SPO11=Hits),
+  SSDS_F1 = distinct(read_tsv("~/Desktop/sci-lianti-files/features/cast/ssds_b6_cast.tab", col_names=c("CHROM", "START", "END", "SSDS_F1"))),
+  SSDS_B6 = distinct(read_tsv("~/Desktop/sci-lianti-files/features/cast/ssds_b6.tab", col_names=c("CHROM", "START", "END", "SSDS_B6"))),
+  SSDS_CAST = distinct(read_tsv("~/Desktop/sci-lianti-files/features/cast/ssds_cast.tab", col_names=c("CHROM", "START", "END", "SSDS_CAST"))),
+  
+  CNV_CAST_GAIN = read_tsv("~/Desktop/sci-lianti-files/features/cast/CNV_CAST_gain.bed", skip=1, col_names=c("CHROM", "START", "END", "CNV_CAST_GAIN")),
+  
+  CNV_CAST_LOSS = read_tsv("~/Desktop/sci-lianti-files/features/cast/CNV_CAST_loss.bed", skip=1, col_names=c("CHROM", "START", "END", "CNV_CAST_LOSS")) %>%
+    mutate(CNV_CAST_LOSS=-CNV_CAST_LOSS),
+  
+  THREE_PRIME_UTR = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.UTR3.bed", guess_max=1e6),
+  
+  FIVE_PRIME_UTR = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.UTR5.bed", guess_max=1e6),
+  
+  GENE = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.gene.bed", guess_max=1e6),
+  
+  LNC_RNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.lnc_RNA.bed", guess_max=1e6),
+  
+  NCRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.ncRNA.bed", guess_max=1e6),
+  
+  PSEUDOGENIC_TRANSCRIPT = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.pseudogenic_transcript.bed", guess_max=1e6),
+  
+  RRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.rRNA.bed", guess_max=1e6),
+  
+  SNRNA_SNORNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.gff3.snRNA_snoRNA.bed", guess_max=1e6),
+  
+  RMSK_DNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.DNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_DNA=1),
+  
+  RMSK_LINE = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.LINE.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_LINE=1),
+  
+  RMSK_LTR = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.LTR.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_LTR=1),
+  
+  RMSK_LC = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.Low_complexity.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_LC=1),
+  
+  RMSK_RC = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.RC.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_RC=1),
+  
+  RMSK_RNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.RNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_RNA=1),
+  
+  RMSK_SINE = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.SINE.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SINE=1),
+  
+  RMSK_SATE = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.Satellite.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SATE=1),
+  
+  RMSK_SIMPLE_REPEAT = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.Simple_repeat.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SIMPLE_REPEAT=1),
+  
+  RMSK_RRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.rRNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_RRNA=1),
+  
+  RMSK_SCRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.scRNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SCRNA=1),
+  
+  RMSK_SNRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.snRNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SNRNA=1),
+  
+  RMSK_SRPRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.srpRNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_SRPRNA=1),
+  
+  RMSK_TRNA = read_tsv("~/Desktop/sci-lianti-files/features/mm10.rmsk.tRNA.bed", col_names=FALSE) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(RMSK_TRNA=1),
+  
+  SEG_DUP = read_tsv("~/Desktop/sci-lianti-files/features/mm10.segdup.bed", skip=1, col_names=F) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3) %>%
+    dplyr::select(CHROM, START, END) %>%
+    mutate(SEG_DUP=1),
+  
+  SEQ_DIV_CAST = read_tsv("~/Desktop/sci-lianti-files/features/cast/CAST.windowed.pi.bedGraph", col_names=c("CHROM", "START", "END", "SEQ_DIV_CAST")),
+  
+  CTCF = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_ctcf.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, CTCF=X7),
+  
+  RNA_POL2 = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_RNApol2.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, RNA_POL2=X7),
+  
+  H3K27AC = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_h3k27ac.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, H3K27AC=X7),
+  
+  H3K36ME3 = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_h3k36me3.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, H3K36ME3=X7),
+  
+  H3K4ME1 = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_h3k4me1.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, H3K4ME1=X7),
+  
+  H3K4ME3 = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_h3k4me3.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, H3K4ME3=X7),
+  
+  LONG_RNA_SEQ = read_tsv("~/Desktop/sci-lianti-files/features/mm10_testis_longRNAseq.broadPeak.bed", col_names=FALSE) %>%
+    dplyr::select(X1, X2, X3, X7) %>%
+    dplyr::rename(CHROM=X1, START=X2, END=X3, LONG_RNA_SEQ=X7),
+  
+  DMRT6 = read_tsv("~/Desktop/sci-lianti-files/features/DMRT6/DMRT6.mm10.bed", col_names=c("CHROM", "START", "END", "DMRT6")),
+  
+  H3K27ME3 = read_tsv("~/Desktop/sci-lianti-files/features/h3k27me3/h3k27me3.mm10.merged.bed", col_names=c("CHROM", "START", "END")) %>%
+    mutate(H3K27ME3=1),
+  
+  PS_ATAC= read_tsv("~/Desktop/sci-lianti-files/features/PS_atac_H3K27ac/ps.atac.bed", col_names=c("CHROM", "START", "END", "PS_ATAC")),
+  
+  PS_H3K27AC = read_tsv("~/Desktop/sci-lianti-files/features/PS_atac_H3K27ac/ps.h3k27ac.bed", col_names=c("CHROM", "START", "END", "PS_H3K27AC")),
+  
+  PS_COHESIN = read_tsv("~/Desktop/sci-lianti-files/features/PS_cohesin/PS_cohesin_0.001.mm10.bed", col_names=c("CHROM", "START", "END", "PS_COHESIN")),
+  
+  PS_SMC1B_LAP = read_tsv("~/Desktop/sci-lianti-files/features/PS_cohesin/PS_SMC1B-LAP_0.1.mm10.bed", col_names=c("CHROM", "START", "END", "PS_SMC1B_LAP")),
+  
+  PS_H2AUB = read_tsv("~/Desktop/sci-lianti-files/features/PS_H2Aub/PS_H2Aub.mm10.bed", col_names=c("CHROM", "START", "END", "PS_H2AUB")),
+  
+  H4K5AC = read_tsv("~/Desktop/sci-lianti-files/features/PS_h4mods/h4k5ac.mm10.bed", col_names=c("CHROM", "START", "END", "H4K5AC")),
+  
+  H4K5BU = read_tsv("~/Desktop/sci-lianti-files/features/PS_h4mods/h4k5bu.mm10.bed", col_names=c("CHROM", "START", "END", "H4K5BU")),
+  
+  H4K8AC = read_tsv("~/Desktop/sci-lianti-files/features/PS_h4mods/h4k8ac.mm10.bed", col_names=c("CHROM", "START", "END", "H4K8AC")),
+  
+  H4K8BU = read_tsv("~/Desktop/sci-lianti-files/features/PS_h4mods/h4k8bu.mm10.bed", col_names=c("CHROM", "START", "END", "H4K8BU")),
+  
+  CTCFL = read_tsv("~/Desktop/sci-lianti-files/features/CTCFL/CTCFL.mm10.bed", col_names=c("CHROM", "START", "END")) %>%
+    mutate(CTCFL=1),
+  
+  MESC_REPLI_SEQ = read_tsv("~/Desktop/sci-lianti-files/features/mESC_repli_seq/mESC_repli_seq.mm10.bed", col_names=c("CHROM", "START", "END", "MESC_REPLI_SEQ")),
+  
+  CTCF_B6 = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/CTCF_b6_aB.mm10.bed", col_names=c("CHROM", "START", "END", "CTCF_B6")),
+  
+  # CTCF_SPRET = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/CTCF_spret_aB.mm10.bed", col_names=c("CHROM", "START", "END", "CTCF_SPRET")),
+  
+  END_SEQ_B6_ETO = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/end_seq_b6_ETO.mm10.bed", col_names=c("CHROM", "START", "END", "END_SEQ_B6_ETO")),
+  
+  # END_SEQ_SPRET_ETO = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/end_seq_spret_ETO.mm10.bed", col_names=c("CHROM", "START", "END", "END_SEQ_SPRET_ETO")),
+  
+  RAD21_B6 = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/RAD21_b6_aB.mm10.bed", col_names=c("CHROM", "START", "END", "RAD21_B6")),
+  
+  # RAD21_SPRET = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/RAD21_spret_aB.mm10.bed", col_names=c("CHROM", "START", "END", "RAD21_SPRET")),
+  
+  TOP2A_MEF = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/TOP2A_MEF.mm10.bed", col_names=c("CHROM", "START", "END", "TOP2A_MEF")),
+  
+  TOP2B_MEF = read_tsv("~/Desktop/sci-lianti-files/features/end_seq/TOP2B_MEF.mm10.bed", col_names=c("CHROM", "START", "END", "TOP2B_MEF")),
+  
+  PATSKI_ALLELIC_ATAC_B6 = read_tsv("~/Desktop/sci-lianti-files/features/patski/patski_allelicATAC.mm10.b6.bed", col_names=c("CHROM", "START", "END", "PATSKI_ALLELIC_ATAC_B6")),
+  
+  # PATSKI_ALLELIC_ATAC_SPRET = read_tsv("~/Desktop/sci-lianti-files/features/patski/patski_allelicATAC.mm10.spret.bed", col_names=c("CHROM", "START", "END", "PATSKI_ALLELIC_ATAC_SPRET")),
+  
+  PATSKI_ALLELIC_CTCF_B6 = read_tsv("~/Desktop/sci-lianti-files/features/patski/patski_allelicCTCF.mm10.b6.bed", col_names=c("CHROM", "START", "END", "PATSKI_ALLELIC_CTCF_B6")),
+  
+  # PATSKI_ALLELIC_CTCF_SPRET = read_tsv("~/Desktop/sci-lianti-files/features/patski/patski_allelicCTCF.mm10.spret.bed", col_names=c("CHROM", "START", "END", "PATSKI_ALLELIC_CTCF_SPRET")),
+  
+  # PATSKI_CTCF_B6_SUMMITS = read_tsv("~/Desktop/sci-lianti-files/features/patski/Patski_ctcf_b6_summits.mm10.bed", col_names=c("CHROM", "START", "END", "NOUSE", "PATSKI_CTCF_B6_SUMMITS")) %>% dplyr::select(-NOUSE),
+  
+  # PATSKI_CTCF_SPRET_SUMMITS = read_tsv("~/Desktop/sci-lianti-files/features/patski/Patski_ctcf_spret_summits.mm10.bed", col_names=c("CHROM", "START", "END", "NOUSE", "PATSKI_CTCF_SPRET_SUMMITS")) %>%
+    # select(-NOUSE),
+  
+  PATSKI_POLIIS5P_B6_SUMMITS = read_tsv("~/Desktop/sci-lianti-files/features/patski/Patski_PolIIS5p_b6_summits.mm10.bed", col_names=c("CHROM", "START", "END", "NOUSE","PATSKI_POLIIS5P_B6_SUMMITS")) %>% dplyr::select(-NOUSE)
+  
+  # PATSKI_POLIIS5P_SPRET_SUMMITS = read_tsv("~/Desktop/sci-lianti-files/features/patski/Patski_PolIIS5p_spret_summits.mm10.bed", col_names=c("CHROM", "START", "END", "NOUSE", "PATSKI_POLIIS5P_SPRET_SUMMITS")) %>%
+    # select(-NOUSE)
+)
+
+cast_features <- map(cast_features, ~drop_na(.x))
+```
+
+### Cast features to join by simple join
+
+```{r}
+cast_other_features <- list(
+  EVENT = list(
+    P7GONIA = read_tsv("~/Desktop/sci-lianti-files/features/cast/p7gonia_event.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "P7GONIA")),
+    PS_MNASE_NUC = read_tsv("~/Desktop/sci-lianti-files/features/cast/PS_MNase_nuc_mm10_event.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_MNASE_NUC")),
+    PS_5MC_EVENT = read_tsv("~/Desktop/sci-lianti-files/features/cast/PS_5mc_mm10_event.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_5MC")),
+    PS_BS_EVENT = read_tsv("~/Desktop/sci-lianti-files/features/cast/PS_bs_event.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_BS")),
+    KAC_EVENT = read_tsv("~/Desktop/sci-lianti-files/features/cast/Kac_event.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KAC"))
+    # KCRO_EVENT = read_tsv("~/Desktop/sci-lianti-files/features/cast/Kcro_event.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KCRO"))
+  ),
+  CONTROL = list(
+    P7GONIA_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/cast/p7gonia_control.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "P7GONIA")),
+    PS_MNASE_NUC_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/cast/PS_MNase_nuc_mm10_control.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_MNASE_NUC")),
+    PS_5MC_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/cast/PS_5mc_mm10_control.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_5MC")),
+    PS_BS_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/cast/PS_bs_control.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_BS")),
+    KAC_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/cast/Kac_control.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KAC"))
+    # KCRO_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/cast/Kcro_control.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KCRO"))
+  ),
+  WINDOW = list(
+    P7GONIA = read_tsv("~/Desktop/sci-lianti-files/features/cast/p7gonia_window.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "P7GONIA")),
+    PS_MNASE_NUC = read_tsv("~/Desktop/sci-lianti-files/features/cast/PS_MNase_nuc_mm10_window.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_MNASE_NUC")),
+    PS_5MC = read_tsv("~/Desktop/sci-lianti-files/features/cast/PS_5mc_mm10_window.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_5MC")),
+    PS_BS = read_tsv("~/Desktop/sci-lianti-files/features/cast/PS_bs_window.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "PS_BS")),
+    KAC = read_tsv("~/Desktop/sci-lianti-files/features/cast/Kac_window.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KAC")),
+    # KCRO_CONTROL = read_tsv("~/Desktop/sci-lianti-files/features/cast/Kcro_window.cast.bed", col_names=c("CHROM", "START", "END", "CELL_ID", "KCRO")),
+    event_hp_m2 = read_tsv("~/Desktop/sci-lianti-files/features/cast/event_window.bed", col_names=c("CHROM", "START", "END", "event_hp_m2")),
+    event_hp = read_tsv("~/Desktop/sci-lianti-files/features/cast/haploid_window.cast.bed", col_names=c("CHROM", "START", "END", "event_hp")),
+    event_m2 = read_tsv("~/Desktop/sci-lianti-files/features/cast/m2_window.cast.bed", col_names=c("CHROM", "START", "END", "event_m2")),
+    event_mt = read_tsv("~/Desktop/sci-lianti-files/features/cast/mt_window.cast.bed", col_names=c("CHROM", "START", "END", "event_mt")),
+    event_me = read_tsv("~/Desktop/sci-lianti-files/features/cast/me_window.cast.bed", col_names=c("CHROM", "START", "END", "event_me"))
+  )
+)
+
+cast_other_features <- map(cast_other_features, function(x) {
+  map(x, function(y) {
+    signal_col <- colnames(y)[min(5, ncol(y))]
+    # signal_col <- rlang::sym(colnames(y)[5])
+    if (!is.numeric(y[[signal_col]])) {
+      y[[signal_col]][y[[signal_col]] == '.'] <- '0'
+      y[[signal_col]] <- as.numeric(y[[signal_col]])
+    }
+    y
+  })
+})
+
+cast_other_features_processed <- list(
+  EVENT_HP = map(cast_other_features$EVENT, function(x) {
+    right_join(x, hb_cast_df[c("CELL_ID", "CHROM", "START", "END")])
+  }),
+  EVENT_M2 = map(cast_other_features$EVENT, function(x) {
+    right_join(x, m2_cast_df[c("CELL_ID", "CHROM", "START", "END")])
+  }),
+  CONTROL_HP = map(cast_other_features$CONTROL, function(x) {
+    filter(x, CELL_ID == "hp")
+  }),
+  CONTROL_M2 = map(cast_other_features$CONTROL, function(x) {
+    filter(x, CELL_ID == "m2")
+  }),
+  WINDOW = cast_other_features$WINDOW
+)
+```
+
+# Per tract feature summary
+
+```{r}
+add_column_by_overlap_join <- function(old_df, df_to_add) {
+  require(data.table)
+  remove_cellid_before_return <- FALSE
+  if (!"CELL_ID" %in% colnames(old_df)) {
+    # for ease of future joining, add a unique CELL_ID to each row so it doesn't contribute to group_by
+    old_df <- add_column(old_df, CELL_ID=c(1:nrow(old_df)), .before=1)
+    remove_cellid_before_return <- TRUE
+  }
+  # old_df: CELL_ID CHROM START END some other fields
+  assertthat::are_equal(colnames(old_df)[1:4], c("CELL_ID", "CHROM", "START", "END"))
+  # df_to_add: CHROM START END signal (where signal is the column to be added by overlap join and average)
+  assertthat::are_equal(colnames(df_to_add)[1:3], c("CHROM", "START", "END"))
+  signal_col <- rlang::sym(colnames(df_to_add)[4])
+  if (mean(df_to_add$START == df_to_add$END) > 0.95) df_to_add$END <- df_to_add$END + 1
+  df_to_add <- df_to_add[!is.na(df_to_add$START) & !is.na(df_to_add$END) & df_to_add$START < df_to_add$END, ]
+  numeric_signal <- TRUE
+  if (mean(df_to_add[[signal_col]] == 1) > 0.95) numeric_signal <- FALSE
+  x <- data.table(df_to_add)
+  y <- data.table(old_df)
+  setkey(y, CHROM, START, END)
+  yx <- foverlaps(x, y, by.x=c("CHROM", "START", "END"), by.y=c("CHROM", "START", "END"), type="any")
+  yx_summary <- as.tibble(yx) %>%
+    drop_na(START, END)
+  if (numeric_signal) {
+    yx_summary <- yx_summary %>%
+      group_by(CELL_ID, CHROM, START, END) %>%
+      summarise(!!signal_col:=mean(!!signal_col))
+  } else {
+    yx_summary <- yx_summary %>%
+      group_by(CELL_ID, CHROM, START, END) %>%
+      summarise(!!signal_col:=sum(!!signal_col))
+  }
+  ret <- old_df %>%
+    left_join(yx_summary, by=c("CELL_ID", "CHROM", "START", "END"))
+  assertthat::are_equal(nrow(ret), nrow(old_df))
+  # by default set tracks with no overlaps found to 0
+  ret[is.na(ret[[colnames(df_to_add)[4]]]), colnames(df_to_add)[4]] <- 0
+  if (remove_cellid_before_return) ret <- ret[colnames(ret) != "CELL_ID"]
+  return(ret)
+}
+
+add_column_by_join <- function(old_df, df_to_add) {
+  # add column by a simple join
+  signal_col <- colnames(df_to_add)[min(5, ncol(df_to_add))]
+  if ("CELL_ID" %in% colnames(old_df)) {
+    # real data with real cell id
+    assertthat::assert_that(length(unique(df_to_add$CELL_ID)) > 10)
+    ret <- left_join(old_df, df_to_add[c("CELL_ID", "CHROM", "START", "END", signal_col)], by=c("CELL_ID", "CHROM", "START", "END"))
+    assertthat::are_equal(nrow(ret), nrow(old_df))
+    return(ret)
+  }
+  # simulated data without cell id
+  ret <- left_join(old_df, df_to_add[c("CHROM", "START", "END", signal_col)], by=c("CHROM", "START", "END"))
+  assertthat::are_equal(nrow(ret), nrow(old_df))
+  return(ret)
+}
+
+process_features <- function(break_points_df, gc, features_to_overlap, features_to_join) {
+  bp <- break_points_df %>%
+    mutate(BP_MID=round((START + END) / 2)) %>%
+    left_join(mm10_fai_df[c("CHROM", "CHROM_SIZE")], by="CHROM") %>%
+    mutate(QUANTILE_25=(CHROM_SIZE - 3e6) / 4 + 3e6,
+           QUANTILE_50=(CHROM_SIZE - 3e6) / 2 + 3e6,
+           QUANTILE_75=(CHROM_SIZE - 3e6) / 4 * 3 + 3e6) %>%
+    mutate(CENTROMERIC=case_when(BP_MID < 1e7 + 3e6 ~ "Yes", TRUE ~ "No"),
+           TELOMERIC=case_when(BP_MID > CHROM_SIZE - 1e7 ~ "Yes", TRUE ~ "No"),
+           QUANTILE_0_25_FLAG=case_when(BP_MID < QUANTILE_25 ~ "Yes", TRUE ~ "No"),
+           QUANTILE_25_75_FLAG=case_when(BP_MID >= QUANTILE_25 & BP_MID < QUANTILE_75 ~ "Yes", TRUE ~ "No"),
+           QUANTILE_75_100_FLAG=case_when(BP_MID >= QUANTILE_75 ~ "Yes", TRUE ~ "No"))
+  assertthat::assert_that(mean(gc$`2_usercol` == bp$START) > 0.95)
+  gc_col <- grep("pct_gc", colnames(gc), value=TRUE)
+  bp$GC <- gc[[gc_col]]
+  bp_f <- bp
+  for (f in features_to_overlap) {
+    bp_f <- add_column_by_overlap_join(bp_f, f)
+  }
+  for (f in features_to_join) {
+    bp_f <- add_column_by_join(bp_f, f)
+  }
+  bp_f$DISTANCE <- bp_f$END - bp_f$START
+  bp_f$KAC <- bp_f$KAC / (bp_f$DISTANCE + 1000)
+  # bp_f$KCRO <- bp_f$KCRO / (bp_f$DISTANCE + 1000)
+  assertthat::are_equal(nrow(break_points_df), nrow(bp_f))
+  return(bp_f)
+}
+```
+
+## Spret
+
+```{r}
+hb_spret_df_with_cor <- process_features(hb_spret_df, hb_spret_gc, spret_features, spret_other_features_processed$EVENT_HP)
+m2_spret_df_with_cor <- process_features(m2_spret_df, m2_spret_gc, spret_features, spret_other_features_processed$EVENT_M2)
+hb_spret_ctrl_with_cor <- process_features(hb_ctrl_spret_df, hb_ctrl_spret_gc, spret_features, spret_other_features_processed$CONTROL_HP)
+m2_spret_ctrl_with_cor <- process_features(m2_ctrl_spret_df, m2_ctrl_spret_gc, spret_features, spret_other_features_processed$CONTROL_M2)
+window_spret_with_cor <- process_features(window_df, window_gc, spret_features, spret_other_features_processed$WINDOW)
+
+spret_window_data <- window_spret_with_cor %>%
+  dplyr::select(-c(CHROM, START, END, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75)) %>%
+  mutate_if(sapply(., is.character), function(x) {ifelse(x == "Yes", 1, 0)})
+```
+
+## Cast
+
+```{r}
+hb_cast_df_with_cor <- process_features(hb_cast_df, hb_cast_gc, cast_features, cast_other_features_processed$EVENT_HP)
+m2_cast_df_with_cor <- process_features(m2_cast_df, m2_cast_gc, cast_features, cast_other_features_processed$EVENT_M2)
+hb_cast_ctrl_with_cor <- process_features(hb_ctrl_cast_df, hb_ctrl_cast_gc, cast_features, cast_other_features_processed$CONTROL_HP)
+m2_cast_ctrl_with_cor <- process_features(m2_ctrl_cast_df, m2_ctrl_cast_gc, cast_features, cast_other_features_processed$CONTROL_M2)
+window_cast_with_cor <- process_features(window_df, window_gc, cast_features, cast_other_features_processed$WINDOW)
+
+cast_window_data <- window_cast_with_cor %>%
+  dplyr::select(-c(CHROM, START, END, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75)) %>%
+  mutate_if(sapply(., is.character), function(x) {ifelse(x == "Yes", 1, 0)})
+```
+
+## Spret +  Cast
+
+```{r}
+# combine break points of spret and cast together and generate combined features for them
+hb_spret_cast_df_with_cor <- process_features(
+  bind_rows(hb_spret_df, hb_cast_df),
+  bind_rows(hb_spret_gc, hb_cast_gc),
+  c(spret_features, cast_features[!names(cast_features) %in% names(spret_features)]),
+  map2(spret_other_features_processed$EVENT_HP, cast_other_features_processed$EVENT_HP, ~bind_rows(.x, .y)))
+
+m2_spret_cast_df_with_cor <- process_features(
+  bind_rows(m2_spret_df, m2_cast_df),
+  bind_rows(m2_spret_gc, m2_cast_gc),
+  c(spret_features, cast_features[!names(cast_features) %in% names(spret_features)]),
+  map2(spret_other_features_processed$EVENT_M2, cast_other_features_processed$EVENT_M2, ~bind_rows(.x, .y)))
+
+hb_spret_cast_ctrl_with_cor <- process_features(
+  bind_rows(hb_ctrl_spret_df, hb_ctrl_cast_df),
+  bind_rows(hb_ctrl_spret_gc, hb_ctrl_cast_gc),
+ c(spret_features, cast_features[!names(cast_features) %in% names(spret_features)]),
+ map2(spret_other_features_processed$CONTROL_HP, cast_other_features_processed$CONTROL_HP, ~bind_rows(.x, .y)))
+
+m2_spret_cast_ctrl_with_cor <- process_features(
+  bind_rows(m2_ctrl_spret_df, m2_ctrl_cast_df),
+  bind_rows(m2_ctrl_spret_gc, m2_ctrl_cast_gc),
+  c(spret_features, cast_features[!names(cast_features) %in% names(spret_features)]),
+  map2(spret_other_features_processed$CONTROL_M2, cast_other_features_processed$CONTROL_M2, ~bind_rows(.x, .y)))
+
+cast_spret_combined_events <- list(
+  event_cast_spret = read_tsv("~/Desktop/sci-lianti-files/features/event_window.cast_spret.bed", col_names=c("CHROM", "START", "END", "event_cast_spret")),
+    event_hp_cast_spret = read_tsv("~/Desktop/sci-lianti-files/features/haploid_window.cast_spret.bed", col_names=c("CHROM", "START", "END", "event_hp_cast_spret")),
+    event_m2_cast_spret = read_tsv("~/Desktop/sci-lianti-files/features/m2_window.cast_spret.bed", col_names=c("CHROM", "START", "END", "event_m2_cast_spret")),
+    event_mt_cast_spret = read_tsv("~/Desktop/sci-lianti-files/features/mt_window.cast_spret.bed", col_names=c("CHROM", "START", "END", "event_mt_cast_spret")),
+    event_me_cast_spret = read_tsv("~/Desktop/sci-lianti-files/features/me_window.cast_spret.bed", col_names=c("CHROM", "START", "END", "event_me_cast_spret")))
+
+cast_spret_combined_events_df <- bind_cols(map(cast_spret_combined_events, ~.x[, 4]))
+
+spret_cast_window_data <- cbind(
+  spret_window_data[!grepl("^event_", colnames(spret_window_data))],
+  cast_window_data[setdiff(names(cast_window_data), names(spret_window_data))], 
+  cast_spret_combined_events_df)
+```
+
+# Per cell feature summary
+
+```{r}
+haploid_spret_upd <- read_tsv(slfile("haploid.upd.0312.spret.tab"))
+m2_spret_upd <- read_tsv(slfile("m2.upd.spret.tab"))
+haploid_cast_upd <- read_tsv(slfile("haploid.upd.cast.tab"))
+m2_cast_upd <- read_tsv(slfile("m2.upd.cast.tab"))
+
+per_cell_summary <- function(bp_f, upd_df, num_cols, int_cols) {
+  check_col_idx <- which(names(bp_f) == "GC") + 1
+  warn_cols <- setdiff(colnames(bp_f)[check_col_idx:ncol(bp_f)], c(num_cols, int_cols))
+  if (length(warn_cols) > 0) warning(sprintf("%s won't be included", paste(warn_cols, collapse=", ")))
+  
+  ret_list <- list()
+  use_upd_df <- filter(upd_df, STRAIN %in% c("b6", "spret", "cast"))
+  for (cell in unique(bp_f$CELL_ID)) {
+    this_cell <- filter(bp_f, CELL_ID == cell)
+    this_upd <- filter(use_upd_df, CELL_ID == cell)
+    ret_chr <- tibble(CELL_ID=cell,
+                    chr1_bp=sum(this_cell$CHROM == "chr1"),
+                    chr2_bp=sum(this_cell$CHROM == "chr2"),
+                    chr3_bp=sum(this_cell$CHROM == "chr3"),
+                    chr4_bp=sum(this_cell$CHROM == "chr4"),
+                    chr5_bp=sum(this_cell$CHROM == "chr5"),
+                    chr6_bp=sum(this_cell$CHROM == "chr6"),
+                    chr7_bp=sum(this_cell$CHROM == "chr7"),
+                    chr8_bp=sum(this_cell$CHROM == "chr8"),
+                    chr9_bp=sum(this_cell$CHROM == "chr9"),
+                    chr10_bp=sum(this_cell$CHROM == "chr10"),
+                    chr11_bp=sum(this_cell$CHROM == "chr11"),
+                    chr12_bp=sum(this_cell$CHROM == "chr12"),
+                    chr13_bp=sum(this_cell$CHROM == "chr13"),
+                    chr14_bp=sum(this_cell$CHROM == "chr14"),
+                    chr15_bp=sum(this_cell$CHROM == "chr15"),
+                    chr16_bp=sum(this_cell$CHROM == "chr16"),
+                    chr17_bp=sum(this_cell$CHROM == "chr17"),
+                    chr18_bp=sum(this_cell$CHROM == "chr18"),
+                    chr19_bp=sum(this_cell$CHROM == "chr19"),
+                    
+                    chr1_upd=sum(this_upd$CHROM == "chr1"),
+                    chr2_upd=sum(this_upd$CHROM == "chr2"),
+                    chr3_upd=sum(this_upd$CHROM == "chr3"),
+                    chr4_upd=sum(this_upd$CHROM == "chr4"),
+                    chr5_upd=sum(this_upd$CHROM == "chr5"),
+                    chr6_upd=sum(this_upd$CHROM == "chr6"),
+                    chr7_upd=sum(this_upd$CHROM == "chr7"),
+                    chr8_upd=sum(this_upd$CHROM == "chr8"),
+                    chr9_upd=sum(this_upd$CHROM == "chr9"),
+                    chr10_upd=sum(this_upd$CHROM == "chr10"),
+                    chr11_upd=sum(this_upd$CHROM == "chr11"),
+                    chr12_upd=sum(this_upd$CHROM == "chr12"),
+                    chr13_upd=sum(this_upd$CHROM == "chr13"),
+                    chr14_upd=sum(this_upd$CHROM == "chr14"),
+                    chr15_upd=sum(this_upd$CHROM == "chr15"),
+                    chr16_upd=sum(this_upd$CHROM == "chr16"),
+                    chr17_upd=sum(this_upd$CHROM == "chr17"),
+                    chr18_upd=sum(this_upd$CHROM == "chr18"),
+                    chr19_upd=sum(this_upd$CHROM == "chr19")
+    )
+    ret_chr_region <- summarise(this_cell, CENTROMERIC=mean(CENTROMERIC == "Yes"),
+            TELOMERIC=mean(TELOMERIC == "Yes"),
+            QUANTILE_0_25_FLAG=sum(QUANTILE_0_25_FLAG == "Yes"),
+            QUANTILE_25_75_FLAG=sum(QUANTILE_25_75_FLAG == "Yes"),
+            QUANTILE_75_100_FLAG=sum(QUANTILE_75_100_FLAG == "Yes"))
+    ret_numeric <- tibble(CELL_ID=cell)
+    for (col in num_cols) {
+      if (col %in% names(this_cell)) ret_numeric[[col]] <- median(this_cell[[col]])
+    }
+    ret_int <- tibble(CELL_ID=cell)
+    for (col in int_cols) {
+      if (col %in% names(this_cell)) ret_int[[col]] <- sum(this_cell[[col]]) / (sum(this_cell$DISTANCE))
+    }
+    ret_list[[length(ret_list) + 1]] <- bind_cols(ret_chr, ret_chr_region, ret_numeric[-1], ret_int[-1])
+  }
+  return(bind_rows(ret_list))
+}
+
+# num_cols will be summarised by median
+num_cols <- c('GC', 'SPO11_BOTH','SPO11_B6','SPO11_SPRET','SPO11_OTHER', 'CNV_SPRET_GAIN', 'CNV_SPRET_LOSS', 'SEQ_DIV_SPRET', 'CTCF', 'RNA_POL2', 'H3K27AC', 'H3K36ME3', 'H3K4ME1', 'H3K4ME3', 'LONG_RNA_SEQ','DMRT6','H3K27ME3','PS_ATAC','PS_H3K27AC','PS_COHESIN','PS_SMC1B_LAP','PS_H2AUB','H4K5AC','H4K5BU','H4K8AC','H4K8BU','CTCFL','MESC_REPLI_SEQ','CTCF_B6','CTCF_SPRET','END_SEQ_B6_ETO','END_SEQ_SPRET_ETO','RAD21_B6','RAD21_SPRET','TOP2A_MEF','TOP2B_MEF','PATSKI_ALLELIC_ATAC_B6','PATSKI_ALLELIC_ATAC_SPRET','PATSKI_ALLELIC_CTCF_B6','PATSKI_ALLELIC_CTCF_SPRET','PATSKI_CTCF_B6_SUMMITS','PATSKI_CTCF_SPRET_SUMMITS','PATSKI_POLIIS5P_B6_SUMMITS','PATSKI_POLIIS5P_SPRET_SUMMITS','P7GONIA','PS_MNASE_NUC','PS_5MC','PS_BS',
+              'SSDS_F1', 'SSDS_B6', 'SSDS_CAST', 'CNV_CAST_GAIN', 'CNV_CAST_LOSS', 'SEQ_DIV_CAST')
+
+# int_cols will be summarised by count
+int_cols <- c('THREE_PRIME_UTR', 'FIVE_PRIME_UTR', 'GENE', 'LNC_RNA', 'NCRNA', 'PSEUDOGENIC_TRANSCRIPT', 'RRNA', 'SNRNA_SNORNA', 'RMSK_DNA', 'RMSK_LINE', 'RMSK_LTR', 'RMSK_LC', 'RMSK_RC', 'RMSK_RNA', 'RMSK_SINE', 'RMSK_SATE', 'RMSK_SIMPLE_REPEAT', 'RMSK_RRNA', 'RMSK_SCRNA', 'RMSK_SNRNA', 'RMSK_SRPRNA', 'RMSK_TRNA', 'SEG_DUP','KAC','KCRO')
+```
+
+## Spret
+
+```{r}
+hb_spret_cell_df_with_cor_ <- per_cell_summary(hb_spret_df_with_cor, haploid_spret_upd, num_cols, int_cols)
+m2_spret_cell_df_with_cor_ <- per_cell_summary(m2_spret_df_with_cor, m2_spret_upd, num_cols, int_cols)
+
+# use SUM_m2_mt as n_mt, use SUM_m2_me as n_me, for haploids, n_mt=0, n_me=19 for all the cells
+m2_spret_mt_me <- read_tsv(slfile("all_m2_merge.spret.tab")) %>%
+  filter(TYPE != "Others")
+m2_spret_mt_me_df <- tibble(CELL_ID=m2_spret_mt_me$CELL_ID, N_MT=m2_spret_mt_me$SUM_m2_mt, N_ME=m2_spret_mt_me$SUM_m2_me)
+
+hb_spret_cell_df_with_cor <- mutate(hb_spret_cell_df_with_cor_, N_MT=0, N_ME=19)
+m2_spret_cell_df_with_cor <- left_join(m2_spret_cell_df_with_cor_, m2_spret_mt_me_df, by="CELL_ID")
+
+spret_cell_df_with_cor <- bind_rows(hb_spret_cell_df_with_cor %>% add_column(TYPE="haploid", .after=1),
+                                    m2_spret_cell_df_with_cor %>% add_column(TYPE="m2 diploid", .after=1))#  %>% dplyr::select(-c(N_MT, N_ME))
+```
+
+## Cast
+
+```{r}
+hb_cast_cell_df_with_cor_ <- per_cell_summary(hb_cast_df_with_cor, haploid_cast_upd, num_cols, int_cols)
+m2_cast_cell_df_with_cor_ <- per_cell_summary(m2_cast_df_with_cor, m2_cast_upd, num_cols, int_cols)
+
+# use SUM_m2_mt as n_mt, use SUM_m2_me as n_me, for haploids, n_mt=0, n_me=19 for all the cells
+m2_cast_mt_me <- read_tsv(slfile("cast/all_m2_merge.cast.tab")) %>%
+  filter(TYPE != "Others")
+m2_cast_mt_me_df <- tibble(CELL_ID=m2_cast_mt_me$CELL_ID, N_MT=m2_cast_mt_me$SUM_m2_mt, N_ME=m2_cast_mt_me$SUM_m2_me)
+
+hb_cast_cell_df_with_cor <- mutate(hb_cast_cell_df_with_cor_, N_MT=0, N_ME=19)
+m2_cast_cell_df_with_cor <- left_join(m2_cast_cell_df_with_cor_, m2_cast_mt_me_df, by="CELL_ID")
+
+cast_cell_df_with_cor <- bind_rows(hb_cast_cell_df_with_cor %>% add_column(TYPE="haploid", .after=1),
+                                    m2_cast_cell_df_with_cor %>% add_column(TYPE="m2 diploid", .after=1))
+```
+
+## Spret + Cast
+
+```{r}
+# combined cell level features of spret and cast!
+hb_spret_cast_cell_df_with_cor_ <- per_cell_summary(hb_spret_cast_df_with_cor,
+                                                    bind_rows(haploid_spret_upd, haploid_cast_upd),
+                                                    num_cols, int_cols)
+m2_spret_cast_cell_df_with_cor_ <- per_cell_summary(m2_spret_cast_df_with_cor,
+                                                    bind_rows(m2_spret_upd, m2_cast_upd),
+                                                    num_cols, int_cols)
+
+m2_spret_cast_mt_me_df <- bind_rows(m2_spret_mt_me_df, m2_cast_mt_me_df)
+
+hb_spret_cast_cell_df_with_cor <- mutate(hb_spret_cast_cell_df_with_cor_, N_MT=0, N_ME=19)
+m2_spret_cast_cell_df_with_cor <- left_join(m2_spret_cast_cell_df_with_cor_, m2_spret_cast_mt_me_df, by="CELL_ID")
+spret_cast_cell_df_with_cor <- bind_rows(hb_spret_cast_cell_df_with_cor %>% add_column(TYPE="haploid", .after=1),
+                                         m2_spret_cast_cell_df_with_cor %>% add_column(TYPE="m2 diploid", .after=1)) %>%
+  mutate(STRAIN=case_when(CELL_ID %in% spret_cell_df_with_cor$CELL_ID ~ "B6/Spret",
+                          CELL_ID %in% cast_cell_df_with_cor$CELL_ID ~ "B6/Cast",
+                          TRUE ~ "Shouldn't happen")) %>%
+  select(CELL_ID, TYPE, STRAIN, everything())
+```
+
+```{r}
+save(hb_spret_df_with_cor,
+     m2_spret_df_with_cor,
+     hb_spret_ctrl_with_cor,
+     m2_spret_ctrl_with_cor,
+     window_spret_with_cor,
+     spret_window_data,
+     spret_cell_df_with_cor,
+     
+     hb_cast_df_with_cor,
+     m2_cast_df_with_cor,
+     hb_cast_ctrl_with_cor,
+     m2_cast_ctrl_with_cor,
+     window_cast_with_cor,
+     cast_window_data,
+     cast_cell_df_with_cor,
+     
+     hb_spret_cast_df_with_cor,
+     m2_spret_cast_df_with_cor,
+     hb_spret_cast_ctrl_with_cor,
+     m2_spret_cast_ctrl_with_cor,
+     # nope, no such thing as window_spret_cast_with_cor
+     spret_cast_window_data,
+     spret_cast_cell_df_with_cor,
+     file="~/Desktop/sciliantifig/inst/extdata/features.rda")
+```
+
+
+# models
+
+```{r}
+md_spret_data <- bind_rows(hb_spret_df_with_cor %>% add_column(RESPONSE="Y", TYPE="hp", .before=1),
+                           m2_spret_df_with_cor %>% add_column(RESPONSE="Y", TYPE="m2", .before=1),
+                           hb_spret_ctrl_with_cor %>% add_column(RESPONSE="N", TYPE="hp", .before=1),
+                           m2_spret_ctrl_with_cor %>% add_column(RESPONSE="N", TYPE="m2", .before=1)) %>%
+  select(-c(CELL_ID, CHROM, START, END, SCORE, STRAND, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75, NOTE, SEGREGATION)) # %>%
+  # drop_na()
+saveRDS(md_spret_data, "~/Desktop/sci-lianti-files/180820_md_spret_data.rds")
+
+# md_spret_cast_data <- bind_rows(md_spret_data, md_cast_data)
+
+# md09_data <- bind_rows(hb_df_with_cor %>% add_column(RESPONSE="Y", TYPE="hp", .before=1),
+#                      m2_df_with_cor %>% add_column(RESPONSE="Y", TYPE="m2", .before=1),
+#                      hb_ctrl_with_cor %>% add_column(RESPONSE="N", TYPE="hp", .before=1),
+#                      m2_ctrl_with_cor %>% add_column(RESPONSE="N", TYPE="m2", .before=1)) %>%
+#   dplyr::select(-c(CELL_ID, CHROM, START, END, SCORE, STRAND, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75, NOTE, SEGREGATION)) # %>%
+#   # drop_na()
+#   
+# md01_data <- bind_rows(hb_df_with_cor %>% add_column(RESPONSE="Y", TYPE="hp", .before=1),
+#                        m2_df_with_cor %>% add_column(RESPONSE="Y", TYPE="m2", .before=1),
+#                        hb_ctrl01_with_cor %>% add_column(RESPONSE="N", TYPE="hp", .before=1),
+#                        m2_ctrl01_with_cor %>% add_column(RESPONSE="N", TYPE="m2", .before=1)) %>%
+#   dplyr::select(-c(CELL_ID, CHROM, START, END, SCORE, STRAND, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75, NOTE, SEGREGATION)) # %>%
+#   # drop_na()
+
+
+
+# hb_data <- filter(md_data, TYPE == "HB") %>%
+#   dplyr::select(-TYPE)
+# md_data <- md09_data
+
+# ran the random forest part on server
+# setwd("/net/shendure/vol8/projects/fly_recomb/nobackup/alignment/crossover_summaries/features/sci-lianti-files/features")
+# md_spret_data <- readRDS("180812_md_spret_data.rds")
+# md_spret_data <- readRDS("180820_md_spret_data.rds")
+
+md_data <- md_spret_data
+
+ncv_list <- bplapply(1:2, function(x) {
+  train_n <- round(nrow(md_data) * 0.9)
+  train_idx <- sample(1:nrow(md_data), size=train_n, replace=FALSE)
+  train_df <- md_data[train_idx, ]
+  train_df$RESPONSE <- factor(train_df$RESPONSE)
+  test_df <- md_data[-train_idx, ]
+  train_control <- trainControl(method = "cv", number = 5, returnResamp = "all",
+                                classProbs = TRUE, 
+                                summaryFunction = twoClassSummary, allowParallel = TRUE)
+  model_weights <- ifelse(train_df$RESPONSE == "Y",
+                          (1/table(train_df$RESPONSE)["Y"]) * 0.5,
+                          (1/table(train_df$RESPONSE)["N"]) * 0.5)
+  md <- train(RESPONSE ~ ., data = train_df, 
+              method = "rf", 
+              trControl = train_control,
+              weights = model_weights,
+              metric = "ROC",
+              na.action = "na.omit")
+  pred <- predict(md, newdata=test_df, type = "prob", na.action="na.omit")
+  pred_df <- tibble(truth=test_df[complete.cases(test_df), ]$RESPONSE, pred=pred$Y)
+  return(pred_df)
+})
+
+# saveRDS(pred_df, "180820_md_spret_pred.rds")
+# pred_df <- readRDS("~/Desktop/sci-lianti-files/180820_md_spret_pred.rds")
+
+# use only MIP > 0.5 features
+
+spret_bma_coef <- coef(spret_window_bas)
+spret_bma_top_predictors <- setdiff(spret_bma_coef$namesx[spret_bma_coef$probne0 > 0.5], "Intercept")
+use_spret_cols <- c('RESPONSE', 'CENTROMERIC', 'TELOMERIC', 'QUANTILE_25_75_FLAG', 'QUANTILE_75_100_FLAG', 'GC', 'SPO11_BOTH', 'CNV_SPRET_GAIN', 'CNV_SPRET_LOSS', 'THREE_PRIME_UTR', 'GENE', 'PSEUDOGENIC_TRANSCRIPT', 'RMSK_DNA', 'RMSK_LINE', 'RMSK_LTR', 'RMSK_LC', 'RMSK_SINE', 'RMSK_SATE', 'SEQ_DIV_SPRET', 'H3K36ME3', 'H3K4ME1', 'DMRT6', 'H3K27ME3', 'CTCFL', 'MESC_REPLI_SEQ', 'TOP2B_MEF', 'PATSKI_ALLELIC_CTCF_B6', 'PATSKI_ALLELIC_CTCF_SPRET', 'P7GONIA')
+
+
+# use_spret_cols <- c("RESPONSE","CENTROMERIC","TELOMERIC","QUANTILE_0_25_FLAG","QUANTILE_25_75_FLAG","GC","SPO11_BOTH","SPO11_SPRET","SPO11_OTHER","CNV_SPRET_GAIN","CNV_SPRET_LOSS","THREE_PRIME_UTR","GENE","PSEUDOGENIC_TRANSCRIPT","RMSK_DNA","RMSK_LINE","RMSK_LTR","RMSK_LC","RMSK_RNA","RMSK_SINE","RMSK_SATE","RMSK_TRNA","SEQ_DIV_SPRET","H3K36ME3","H3K4ME1","LONG_RNA_SEQ","DMRT6","H3K27ME3","H4K8AC","CTCFL","MESC_REPLI_SEQ","TOP2B_MEF","PATSKI_ALLELIC_CTCF_B6","PATSKI_ALLELIC_CTCF_SPRET","PATSKI_POLIIS5P_SPRET_SUMMITS","P7GONIA","PS_MNASE_NUC","PS_5MC")
+
+sub_train_df <- train_df[use_spret_cols]
+sub_test_df <- test_df[use_spret_cols]
+
+sub_md <- train(RESPONSE ~ ., data = sub_train_df, 
+                method = "rf", 
+                trControl = train_control,
+                weights = model_weights,
+                metric = "ROC",
+                na.action = "na.omit")
+sub_pred <- predict(sub_md, newdata=sub_test_df, type = "prob", na.action="na.omit")
+sub_pred_df <- tibble(truth=sub_test_df[complete.cases(sub_test_df), ]$RESPONSE, pred=sub_pred$Y)
+
+# saveRDS(sub_pred_df, "180820_md_spret_sub_pred.rds")
+# sub_pred_df <- readRDS("~/Desktop/sci-lianti-files/180820_md_spret_sub_pred.rds")
+
+ncv_df <- bind_rows(ncv_list)
+roc_obj <- roc(ncv_df$truth, ncv_df$pred)
+plot(roc_obj)
+auc(roc_obj)
+
+roc_obj <- roc(pred_df$truth, pred_df$pred)
+plot(roc_obj)
+auc(roc_obj)
+
+roc_obj <- roc(sub_pred_df$truth, sub_pred_df$pred)
+plot(roc_obj)
+auc(roc_obj)
+
+p <- ggplot(tibble(Sensitivity=roc_obj$sensitivities, Specificity=roc_obj$specificities), aes(Specificity, Sensitivity)) +
+  geom_segment(x=0, y=1, xend=-1, yend=0, color="grey50", size=1) +
+  geom_line(color="orangered", size=1) +
+  xlim(1, 0) +
+  ylim(0, 1) +
+  theme_classic()
+
+ggsave("~/Desktop/sci-lianti-files/spret_rf_roc.pdf", p, "pdf", width=2.6, height=2.5)
+```
+
+```{r}
+as.numeric.factor <- function(x) {as.numeric(levels(x))[x]}
+
+spret_window_data <- window_spret_with_cor %>%
+  dplyr::select(-c(CHROM, START, END, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75)) %>%
+  mutate_if(sapply(., is.character), function(x) {ifelse(x == "Yes", 1, 0)})
+spret_window_data <- spret_window_data[!grepl("event_", colnames(spret_window_data)) | colnames(spret_window_data) == "event_hp_m2"]
+
+
+spret_window_lm <- lm(log1p(event_hp_m2) ~ ., data=spret_window_data)
+
+sink("~/Desktop/sci-lianti-files/spret_window_hp_m2_lm_output.txt")
+print(summary(spret_window_lm))
+sink()
+
+window_hp_lm <- lm(event_hp ~ ., data=window_data[!grepl("event_", colnames(window_data)) | colnames(window_data) == "event_hp"])
+window_m2_lm <- lm(event_m2 ~ ., data=window_data[!grepl("event_", colnames(window_data)) | colnames(window_data) == "event_m2"])
+window_mt_lm <- lm(event_mt ~ ., data=window_data[!grepl("event_", colnames(window_data)) | colnames(window_data) == "event_mt"])
+window_me_lm <- lm(event_me ~ ., data=window_data[!grepl("event_", colnames(window_data)) | colnames(window_data) == "event_me"])
+```
+
+
+```{r}
+library("BAS")
+
+bas_spret_window_data <- as.data.frame(spret_window_data[!grepl("event_", colnames(spret_window_data)) | colnames(spret_window_data) == "event_hp_m2"])
+# for(col in colnames(dt)) {
+#   dt[[col]][is.na(dt[[col]])] <- mean(dt[[col]], na.rm = TRUE)
+# }
+# any(is.na(dt))
+set.seed(12345)
+spret_window_bas <- bas.lm(log1p(event_hp_m2) ~ ., data=bas_spret_window_data, n.models=2^13, method='BAS')
+
+mt_dt <- window_data[!grepl("event_", colnames(window_data)) | colnames(window_data) == "event_mt"]
+mt_window_bas <- bas.lm(event_mt ~ ., data=as.data.frame(mt_dt), n.models=2^11, method='BAS')
+
+me_dt <- window_data[!grepl("event_", colnames(window_data)) | colnames(window_data) == "event_me"]
+me_window_bas <- bas.lm(event_me ~ ., data=as.data.frame(me_dt), n.models=2^11, method='BAS')
+# me_window_bas <- bas.lm(log10(0.1 + event_me) ~ ., data=as.data.frame(me_dt), n.models=2^18, prior="ZS-null", modelprior=uniform(), method = "MCMC")
+# image(me_window_bas, top.models = 50)# window_bas_subset <- bas.lm(event ~ ., data=window_data, n.models=2^20, prior='JZS')
+
+# image(window_bas, top.models = 100)
+# image(window_bas_subset)
+
+# window_ela <- cv.glmnet(as.matrix(dt[, -79]), dt$event, family="gaussian")
+
+# pca <- prcomp(as.matrix(window_data[, -79]), scale.=TRUE)
+```
+
+```{r}
+bas_plot <- function (x, top.models = 20) {
+  require(tidyverse)
+  xcoef <- coef(x)
+  incprob <- tibble(Predictor=xcoef$namesx, InclusionProb=xcoef$probne0)
+  
+  postprob <- x$postprobs
+  top.models <- min(top.models, x$n.models)
+  best <- order(-x$postprobs)[1:top.models]
+  postprob <- postprob[best]/sum(postprob[best])
+  which.mat <- list2matrix.which(x, best)
+  nvar <- ncol(which.mat)
+  subset <- 1:nvar
+  which.mat <- which.mat[, subset, drop = FALSE]
+  df <- as.data.frame(which.mat) %>%
+    mutate(Rank=row_number()) %>%
+    gather(Predictor, Included, 1:nvar) %>%
+    left_join(tibble(Rank=1:top.models, PosteriorProb=postprob)) %>%
+    mutate(PosteriorProb=case_when(Included == 0 ~ -1,
+                                   TRUE ~ PosteriorProb)) %>%
+    left_join(incprob) %>%
+    group_by(Predictor) %>%
+    mutate(PredIncludedMean=mean(Included == 1)) %>%
+    ungroup() %>%
+    arrange(desc(InclusionProb)) %>%
+    mutate(Predictor=factor(Predictor, levels=rev(unique(.$Predictor))))
+  p_left <- ggplot(df, aes(Rank, Predictor, fill=PosteriorProb)) +
+    geom_tile() +
+    scale_fill_gradient2(low="grey50", mid="white", high="red", guide=FALSE) +
+    xlim(1, top.models) +
+    theme_bw() +
+    theme(panel.grid.major=element_blank(),
+          panel.grid.minor=element_blank()) 
+  p_right <- distinct(df, Predictor, InclusionProb) %>%
+    ggplot(aes(Predictor, InclusionProb)) +
+    geom_bar(stat='identity', fill='dodgerblue') +
+    coord_flip() +
+    theme_bw() +
+    xlab("") +
+    ylab("Inclusion Probability") +
+    theme(panel.grid.major=element_blank(),
+          panel.grid.minor=element_blank(),
+          panel.border=element_blank(),
+          axis.text.y=element_blank(),
+          axis.line=element_line(size=0.2)
+          )
+    
+  p <- gridExtra::grid.arrange(p_left, p_right, nrow=1, widths=c(80, 25))
+  return(p)  
+}
+
+p <- bas_plot(spret_window_bas)
+p_mt <- bas_plot(mt_window_bas)
+p_me <- bas_plot(me_window_bas)
+ggsave("~/Desktop/sci-lianti-files/bas_spret_varimp.pdf", p, "pdf", width=8, height=9)
+ggsave("~/Desktop/sci-lianti-files/bas_varimp_mt.pdf", p_mt, "pdf", width=8, height=9)
+ggsave("~/Desktop/sci-lianti-files/bas_varimp_me.pdf", p_me, "pdf", width=8, height=9)
+
+sink("~/Desktop/sci-lianti-files/bas_spret_coef.txt")
+print(coef(spret_window_bas))
+sink()
+
+```
+
+```{r}
+
+# cell_pca <- prcomp(log1p(cell_df[-(1:2)]), scale.=T)
+
+# hap_cell_df <- cell_df[cell_df$TYPE == "haploid", ]
+# m2_cell_df <- m2_cell_df_with_cor %>% add_column(TYPE="m2 diploid", .after=1)
+# spret_chrome_features <- colnames(spret_cell_df_with_cor)[c(1:45, 118:119)]
+
+upd_features <- grep("_upd", colnames(spret_cell_df_with_cor), value=TRUE)
+mtme_features <- c("N_MT", "N_ME")
+
+# cell_df <- hap_cell_df
+# cell_df <- m2_cell_df
+# cell_df <- cell_df[cell_df$TYPE == "m2 diploid", chrome_features]
+
+spret_cell_pca <- prcomp((spret_cell_df_with_cor[-(1:2)]), scale.=T)
+spret_cell_pca_noupd <- prcomp((spret_cell_df_with_cor[!colnames(spret_cell_df_with_cor) %in% upd_features][-(1:2)]), scale.=T)
+spret_cell_pca_nomtme <- prcomp((spret_cell_df_with_cor[!colnames(spret_cell_df_with_cor) %in% mtme_features][-(1:2)]), scale.=T)
+spret_cell_pca_noupdmtme <- prcomp((spret_cell_df_with_cor[!colnames(spret_cell_df_with_cor) %in% c(upd_features, mtme_features)][-(1:2)]), scale.=T)
+
+plot_cell_pca <- function(cell_pca, cell_df, x="PC1", y="PC2", cols=c()) {
+  require(viridis)
+  require(gridExtra)
+  s <- summary(cell_pca)
+  s1 <- s$importance["Proportion of Variance", x] * 100
+  s2 <- s$importance["Proportion of Variance", y] * 100
+  cell_pca_df <- cell_df %>%
+    mutate(PCX=cell_pca$x[, x],
+           PCY=cell_pca$x[, y])
+  if (length(cols) == 0) cols <- setdiff(names(cell_pca_df)[-1], c("PCX", "PCY"))
+  plts <- map(cols, function(c) {
+    if (is.numeric(cell_pca_df[[c]])) {
+      this_df <- cell_pca_df
+      this_df[[c]] <- log1p(cell_pca_df[[c]])
+    } else {
+      this_df <- cell_pca_df
+    }
+    ggplot(this_df, aes(PCX, PCY)) +
+      geom_point(aes_string(color=c), alpha=0.6) +
+      scale_color_viridis(discrete=!is.numeric(this_df[[c]])) +
+      xlab(sprintf("%s (%1.2f%%)", x, s1)) +
+      ylab(sprintf("%s (%1.2f%%)", y, s2)) +
+      theme_classic() +
+      theme(legend.position="bottom",
+            legend.title=element_text(size=25),
+            legend.text=element_text(size=12),
+            axis.title=element_text(size=25))
+  })
+  return(plts)
+}
+
+
+png("~/Desktop/sci-lianti-files/spret_cell_pca.png", 8000, 6000, res=200)
+do.call("grid.arrange", c(plot_cell_pca(spret_cell_pca, spret_cell_df_with_cor), nrow=9))
+dev.off()
+
+spret_sub_cols <- c("TYPE","chr3_bp","chr1_upd","TELOMERIC","QUANTILE_0_25_FLAG","SPO11_BOTH","SPO11_B6","SPO11_SPRET","SPO11_OTHER","CNV_SPRET_LOSS","CTCF","RNA_POL2","H3K27AC","H3K36ME3","H3K4ME3","LONG_RNA_SEQ","DMRT6","H3K27ME3","PS_ATAC","PS_H3K27AC","PS_COHESIN","PS_SMC1B_LAP","H4K5AC","H4K5BU","H4K8AC","H4K8BU","CTCFL","CTCF_B6","CTCF_SPRET","END_SEQ_B6_ETO","END_SEQ_SPRET_ETO","RAD21_B6","RAD21_SPRET","TOP2A_MEF","TOP2B_MEF","PATSKI_ALLELIC_ATAC_B6","PATSKI_ALLELIC_ATAC_SPRET","PATSKI_ALLELIC_CTCF_B6","PATSKI_ALLELIC_CTCF_SPRET","P7GONIA","GENE","LNC_RNA","KAC","N_MT","N_ME")
+
+png("~/Desktop/sci-lianti-files/spret_cell_pca_selected_cols.png", 8000, 6000, res=200)
+do.call("grid.arrange", c(plot_cell_pca(spret_cell_pca, spret_cell_df_with_cor, cols=spret_sub_cols), ncol=8))
+dev.off()
+
+png("~/Desktop/fen_stuff/spret_cell_pca_noupd.png", 6000, 6000, res=200)
+do.call("grid.arrange", c(plot_cell_pca(spret_cell_pca_noupd, spret_cell_df_with_cor), nrow=9))
+dev.off()
+png("~/Desktop/fen_stuff/spret_cell_pca_nomtme.png", 6000, 6000, res=200)
+do.call("grid.arrange", c(plot_cell_pca(spret_cell_pca_nomtme, spret_cell_df_with_cor), nrow=9))
+dev.off()
+png("~/Desktop/fen_stuff/spret_cell_pca_noupdmtme.png", 6000, 6000, res=200)
+do.call("grid.arrange", c(plot_cell_pca(spret_cell_pca_noupdmtme, spret_cell_df_with_cor), nrow=9))
+dev.off()
+
+plot_cell_pca_simp <- function(cell_pca, cell_df, x="PC1", y="PC2") {
+  s <- summary(cell_pca)
+  s1 <- s$importance["Proportion of Variance", x] * 100
+  s2 <- s$importance["Proportion of Variance", y] * 100
+  cell_pca_df <- cell_df %>%
+    mutate(PCX=cell_pca$x[, x],
+           PCY=cell_pca$x[, y]) %>%
+    mutate(TYPE=R.utils::capitalize(TYPE))
+  
+  p <- ggplot(cell_pca_df, aes(PCX, PCY)) +
+      geom_point(aes(color=TYPE), alpha=0.4) +
+      scale_color_manual(values=c("Haploid"="dodgerblue", "M2 diploid"="orangered"), name="") +
+      xlab(sprintf("%s (%1.2f%%)", x, s1)) +
+      ylab(sprintf("%s (%1.2f%%)", y, s2)) +
+      theme_classic()
+  return(p)
+}
+
+ggsave("~/Desktop/sci-lianti-files/spret_cell_pca.pdf", plot_cell_pca_simp(spret_cell_pca, spret_cell_df_with_cor), "pdf", width=4, height=3)
+ggsave("~/Desktop/fen_stuff/cell_pca_noupd.pdf", plot_cell_pca_simp(spret_cell_pca_noupd, spret_cell_df_with_cor), "pdf", width=4, height=3)
+ggsave("~/Desktop/fen_stuff/cell_pca_nomtme.pdf", plot_cell_pca_simp(spret_cell_pca_nomtme, spret_cell_df_with_cor), "pdf", width=4, height=3)
+ggsave("~/Desktop/fen_stuff/cell_pca_noupdmtme.pdf", plot_cell_pca_simp(spret_cell_pca_noupdmtme, spret_cell_df_with_cor), "pdf", width=4, height=3)
+
+library(Rtsne)
+# cell_tsne <- Rtsne(as.matrix(log1p(cell_df[-(1:2)])))
+cell_tsne <- Rtsne(cell_pca$x[, 1:5], check_duplicates=FALSE)
+cell_tsne_df <- cell_df %>%
+  mutate(TSNE_1=cell_tsne$Y[, 1],
+         TSNE_2=cell_tsne$Y[, 2])
+
+plts <- map(names(cell_tsne_df)[-1], function(x) {
+  ggplot(cell_tsne_df, aes(TSNE_1, TSNE_2)) +
+    geom_point(aes_string(color=x), alpha=0.6) +
+    scale_color_viridis(discrete=!is.numeric(cell_tsne_df[[x]])) +
+    theme_bw() +
+    theme(legend.position="bottom")
+})
+
+png("~/Desktop/fen_stuff/m2_tsne.png", 6000, 6000, res=200)
+do.call("grid.arrange", c(plts, nrow=9))
+dev.off()
+
+```
+
+```{r}
+spret_cast_cell_pca <- prcomp((spret_cast_cell_df_with_cor[-(1:3)]), scale.=T)
+
+plot_cell_pca_simp2 <- function(cell_pca, cell_df, x="PC1", y="PC2") {
+  s <- summary(cell_pca)
+  s1 <- s$importance["Proportion of Variance", x] * 100
+  s2 <- s$importance["Proportion of Variance", y] * 100
+  cell_pca_df <- cell_df %>%
+    mutate(PCX=cell_pca$x[, x],
+           PCY=cell_pca$x[, y]) %>%
+    mutate(TYPE=R.utils::capitalize(TYPE))
+  
+  p <- ggplot(cell_pca_df, aes(PCX, PCY)) +
+      geom_point(aes(color=STRAIN), alpha=0.4) +
+      scale_color_manual(values=c("B6/Spret"="dodgerblue", "B6/Cast"="orangered"), name="") +
+      xlab(sprintf("%s (%1.2f%%)", x, s1)) +
+      ylab(sprintf("%s (%1.2f%%)", y, s2)) +
+      theme_classic()
+  return(p)
+}
+
+plot_cell_pca_simp2(spret_cast_cell_pca, spret_cast_cell_df_with_cor, "PC1", "PC2")
+plot_cell_pca_simp2(spret_cast_cell_pca, spret_cast_cell_df_with_cor, "PC1", "PC3")
+plot_cell_pca_simp2(spret_cast_cell_pca, spret_cast_cell_df_with_cor, "PC2", "PC3")
+plot_cell_pca_simp2(spret_cast_cell_pca, spret_cast_cell_df_with_cor, "PC1", "PC4")
+```
+
+# Correlation among window features
+
+```{r}
+# event_hp, event_m2, event_mt, event_me
+
+window_spret_features_for_cor <- window_spret_with_cor %>%
+  dplyr::select(-c(CHROM, START, END, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75)) %>%
+  mutate_if(sapply(., is.character), function(x) {ifelse(x == "Yes", 1, 0)})
+
+window_spret_features_cor <- cor(window_spret_features_for_cor, use='pairwise.complete.obs', method='spearman')
+dim(window_spret_features_cor)
+window_spret_features_order <- corrplot::corrMatOrder(window_spret_features_cor[1:75, 1:75], order = "hclust", hclust.method = "complete")
+window_spret_features_order <- c(c(76:80), window_spret_features_order)
+
+pdf("~/Desktop/sci-lianti-files/event_feature_window_cor_spret.pdf", 10, 10)
+corrplot::corrplot(window_spret_features_cor[window_spret_features_order, window_spret_features_order], tl.cex=0.5, type="upper", method="color", tl.col=c(rep("red", 5), rep("steelblue", 1e3)))
+dev.off()
+
+window_features_cor[grep("event", colnames(window_features_cor), value=T), ] %>%
+  as_tibble(rownames="EVENT") %>%
+  write_tsv("~/Desktop/sci-lianti-files/event_feature_window_cor.tab")
+```
+
+# Apr 11 address these:
+
+1. crossover pileup correlation matrix (Fig.S7)
+need Pearson correlation r and p-value
+event_haploid ~ event_m2
+event_haploid+event_m2 ~ spo11_both
+event_haploid+event_m2 ~ spo11_both + spo11_b6 + spo11_spret + spo11_other
+
+```{r}
+c1 <- cor.test(window_features_for_cor$event_hp, window_features_for_cor$event_m2, method="spearman")
+c1$estimate
+c1$p.value
+
+c2 <- cor.test(window_features_for_cor$event_hp + window_features_for_cor$event_m2, window_features_for_cor$SPO11_BOTH, method="spearman")
+c2$estimate
+c2$p.value
+
+c3 <- cor.test(window_features_for_cor$event_hp + window_features_for_cor$event_m2,
+         window_features_for_cor$SPO11_BOTH + window_features_for_cor$SPO11_B6 + window_features_for_cor$SPO11_SPRET + window_features_for_cor$SPO11_OTHER, method="spearman")
+c3$estimate
+c3$p.value
+```
+
+2. crossover pileup regression:
+lm summary table (coefficient and p-value)
+summary table (MIP for each feature) from BMA (edited)
+
+```{r}
+summary(window_hp_m2_lm)
+coef(window_bas)
+```
+
+3. “cell_pca” all feature plot, not only PC1 and PC2 with haploid and m2 diploid separtion
+4. Random forest 0.73 AUC with all features, want an AUC with only features included > median inclusion probability from BMA, or only with features significant after multiple correction from lm.
+
+done above.
+
+4. Random forest 0.73 AUC with all features, want an AUC with only features included > median inclusion probability from BMA, or only with features significant after multiple correction from lm.
+
+```{r}
+bma_coef <- coef(window_bas)
+bma_top_predictors <- setdiff(bma_coef$namesx[bma_coef$probne0 > median(bma_coef$probne0)], "Intercept")
+
+lm_coef <- anova(window_hp_m2_lm)
+lm_top_predictors <- setdiff(rownames(lm_coef)[lm_coef$`Pr(>F)` < 0.05], c("Intercept", NA))
+
+sub_md_data <- md_data[c("RESPONSE", "TYPE", bma_top_predictors)]
+
+# ncv_list <- bplapply(1:1, function(x) {
+  train_n <- round(nrow(sub_md_data) * 0.9)
+  train_idx <- sample(1:nrow(sub_md_data), size=train_n, replace=FALSE)
+  train_df <- sub_md_data[train_idx, ]
+  train_df$RESPONSE <- factor(train_df$RESPONSE)
+  test_df <- sub_md_data[-train_idx, ]
+  train_control <- trainControl(method = "cv", number = 5, returnResamp = "all",
+                                classProbs = TRUE, 
+                                summaryFunction = twoClassSummary)
+  model_weights <- ifelse(train_df$RESPONSE == "Y",
+                          (1/table(train_df$RESPONSE)["Y"]) * 0.5,
+                          (1/table(train_df$RESPONSE)["N"]) * 0.5)
+  md <- train(RESPONSE ~ ., data = train_df, 
+              method = "rf", 
+              trControl = train_control,
+              weights = model_weights,
+              metric = "ROC")
+  pred <- predict(md, newdata=test_df, type = "prob")
+  pred_df <- tibble(truth=test_df$RESPONSE, pred=pred$Y)
+#  return(pred_df)
+# })
+
+sub_md_data2 <- md_data[c("RESPONSE", "TYPE", lm_top_predictors)]
+
+# ncv_list <- bplapply(1:1, function(x) {
+  train_n <- round(nrow(sub_md_data2) * 0.9)
+  train_idx <- sample(1:nrow(sub_md_data2), size=train_n, replace=FALSE)
+  train_df <- sub_md_data2[train_idx, ]
+  train_df$RESPONSE <- factor(train_df$RESPONSE)
+  test_df <- sub_md_data2[-train_idx, ]
+  train_control <- trainControl(method = "cv", number = 5, returnResamp = "all",
+                                classProbs = TRUE, 
+                                summaryFunction = twoClassSummary)
+  model_weights <- ifelse(train_df$RESPONSE == "Y",
+                          (1/table(train_df$RESPONSE)["Y"]) * 0.5,
+                          (1/table(train_df$RESPONSE)["N"]) * 0.5)
+  md2 <- train(RESPONSE ~ ., data = train_df, 
+              method = "rf", 
+              trControl = train_control,
+              weights = model_weights,
+              metric = "ROC")
+  pred2 <- predict(md2, newdata=test_df, type = "prob")
+  pred_df2 <- tibble(truth=test_df$RESPONSE, pred=pred$Y)  
+ 
+roc_obj <- roc(pred_df2$truth, pred_df2$pred)
+plot(roc_obj)
+auc(roc_obj)
+```
+
+# combine spret and cast for cor
+
+```{r}
+cast_spret_combined_events <- list(
+  event_cast_spret = read_tsv("~/Desktop/sci-lianti-files/features/event_window.cast_spret.bed", col_names=c("CHROM", "START", "END", "event_cast_spret")),
+    event_hp_cast_spret = read_tsv("~/Desktop/sci-lianti-files/features/haploid_window.cast_spret.bed", col_names=c("CHROM", "START", "END", "event_hp_cast_spret")),
+    event_m2_cast_spret = read_tsv("~/Desktop/sci-lianti-files/features/m2_window.cast_spret.bed", col_names=c("CHROM", "START", "END", "event_m2_cast_spret")),
+    event_mt_cast_spret = read_tsv("~/Desktop/sci-lianti-files/features/mt_window.cast_spret.bed", col_names=c("CHROM", "START", "END", "event_mt_cast_spret")),
+    event_me_cast_spret = read_tsv("~/Desktop/sci-lianti-files/features/me_window.cast_spret.bed", col_names=c("CHROM", "START", "END", "event_me_cast_spret")))
+
+cast_spret_combined_events_df <- bind_cols(map(cast_spret_combined_events, ~.x[, 4]))
+
+spret_cast_window_data <- cbind(
+  spret_window_data[!grepl("^event_", colnames(spret_window_data))],
+  cast_window_data[setdiff(names(cast_window_data), names(spret_window_data))], 
+  cast_spret_combined_events_df[c("event_cast_spret")])
+
+spret_cast_window_lm <- lm(log1p(event_cast_spret) ~ ., data=spret_cast_window_data)
+
+sink("~/Desktop/sci-lianti-files/spret_cast_window_lm_output.txt")
+print(summary(spret_cast_window_lm))
+sink()
+
+bas_spret_cast_window_data <- as.data.frame(spret_cast_window_data)
+# for(col in colnames(dt)) {
+#   dt[[col]][is.na(dt[[col]])] <- mean(dt[[col]], na.rm = TRUE)
+# }
+# any(is.na(dt))
+set.seed(12345)
+spret_cast_window_bas <- bas.lm(log1p(event_cast_spret) ~ ., data=bas_spret_cast_window_data, n.models=2^14, method='BAS')
+p <- bas_plot(spret_cast_window_bas)
+ggsave("~/Desktop/sci-lianti-files/bas_spret_cast_varimp.pdf", p, "pdf", width=8, height=9)
+
+sink("~/Desktop/sci-lianti-files/bas_spret_cast_coef.txt")
+print(coef(spret_cast_window_bas))
+sink()
+
+window_spret_cast_features_for_cor <- window_cast_with_cor %>%
+  select(-c(CHROM, START, END, DISTANCE, BP_MID, CHROM_SIZE, QUANTILE_25, QUANTILE_50, QUANTILE_75)) %>%
+  mutate_if(sapply(., is.character), function(x) {ifelse(x == "Yes", 1, 0)})
+
+
+window_spret_cast_features_for_cor <- bind_cols(
+  window_spret_features_for_cor %>% dplyr::select(-starts_with("event_")),
+  window_cast_features_for_cor[setdiff(colnames(window_cast_features_for_cor), colnames(window_spret_features_for_cor))],
+  cast_spret_combined_events_df)
+
+window_spret_cast_features_cor <- cor(window_spret_cast_features_for_cor, use='pairwise.complete.obs', method='spearman')
+dim(window_spret_cast_features_cor)
+window_spret_cast_features_order <- corrplot::corrMatOrder(window_spret_cast_features_cor[1:81, 1:81], order = "hclust", hclust.method = "complete")
+window_spret_cast_features_order <- c(c(82:86), window_spret_cast_features_order)
+
+pdf("~/Desktop/sci-lianti-files/event_feature_window_cor_spret_cast.pdf", 10, 10)
+corrplot::corrplot(window_spret_cast_features_cor[window_spret_cast_features_order, window_spret_cast_features_order], tl.cex=0.5, type="upper", method="color", tl.col=c(rep("red", 5), rep("steelblue", 1e3)))
+dev.off()
+
+
+
+
+window_features_spret_cast_cor <- cor(combined_events_for_cor, use='pairwise.complete.obs', method='spearman')
+ncol(window_features_spret_cast_cor)
+window_features_spret_cast_order <- corrplot::corrMatOrder(window_features_spret_cast_cor[1:83, 1:83], order = "hclust", hclust.method = "complete")
+window_features_spret_cast_order <- c(c(84:88), window_features_spret_cast_order)
+
+pdf("~/Desktop/sci-lianti-files/event_feature_window_cor_spret_cast.pdf", 10, 10)
+corrplot::corrplot(window_features_spret_cast_cor[window_features_spret_cast_order, window_features_spret_cast_order], tl.cex=0.5, type="upper", method="color", tl.col=c(rep("red", 5), rep("steelblue", 88)))
+dev.off()
+
+window_data <- combined_events_for_cor
+
+window_hp_m2_lm <- lm(log1p(event_cast_spret) ~ ., data=window_data[!grepl("event_", colnames(window_data)) | colnames(window_data) == "event_cast_spret"])
+
+sink("~/Desktop/sci-lianti-files/cast_spret_window_hp_m2_lm_output.txt")
+print(summary(window_hp_m2_lm))
+sink()
+```
+
+# Correlation of these items
+event_cast vs event_spret
+event_cast_haploid vs event_cast_m2
+event_spret_haploid vs event_spret_m2
+event_cast vs ssds_b6
+event_cast vs ssds_cast
+event_cast vs ssds_f1
+ssds_b6 vs spo11_both
+ssds_b6 vs spo11_all_Hits
+event_spret vs spo11_both
+event_spret vs spo11_all_Hits
+
+```{r}
+# event_cast vs event_spret
+cor.test(window_spret_features_for_cor$event_hp_m2, window_cast_features_for_cor$event_hp_m2, method="pearson")[c("estimate", "p.value")]
+
+# event_cast_haploid vs event_cast_m2
+cor.test(window_cast_features_for_cor$event_hp, window_cast_features_for_cor$event_m2, method="pearson")[c("estimate", "p.value")]
+
+# event_spret_haploid vs event_spret_m2
+cor.test(window_spret_features_for_cor$event_hp, window_spret_features_for_cor$event_m2, method="pearson")[c("estimate", "p.value")]
+
+# event_cast vs ssds_b6
+cor.test(window_cast_features_for_cor$event_hp_m2, window_cast_features_for_cor$SSDS_B6, method="pearson")[c("estimate", "p.value")]
+
+# event_cast vs ssds_cast
+cor.test(window_cast_features_for_cor$event_hp_m2, window_cast_features_for_cor$SSDS_CAST, method="pearson")[c("estimate", "p.value")]
+
+# event_cast vs ssds_f1
+cor.test(window_cast_features_for_cor$event_hp_m2, window_cast_features_for_cor$SSDS_F1, method="pearson")[c("estimate", "p.value")]
+
+# ssds_b6 vs spo11_both
+cor.test(window_spret_cast_features_for_cor$SSDS_B6, window_spret_cast_features_for_cor$SPO11_BOTH, method="pearson")[c("estimate", "p.value")]
+
+# ssds_b6 vs spo11_all_Hits
+# temporarally add SPO11 as a feature back to window_cast_features_for_cor
+cor.test(window_cast_features_for_cor$SSDS_B6, window_cast_features_for_cor$SPO11, method="pearson")[c("estimate", "p.value")]
+
+# event_spret vs spo11_both
+cor.test(window_spret_features_for_cor$event_hp_m2, window_spret_features_for_cor$SPO11_BOTH, method="pearson")[c("estimate", "p.value")]
+
+# event_spret vs spo11_all_Hits
+# temporarally add SPO11 as a feature back to window_spret_features_for_cor
+cor.test(window_spret_features_for_cor$event_hp_m2, window_spret_features_for_cor$SPO11, method="pearson")[c("estimate", "p.value")]
+```

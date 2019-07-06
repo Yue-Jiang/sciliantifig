@@ -1,0 +1,9 @@
+.DS_Store
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+output/
+output_cast/
+output*
+packrat/lib*/

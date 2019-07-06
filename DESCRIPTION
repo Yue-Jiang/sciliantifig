@@ -1,0 +1,30 @@
+Package: sciliantifig
+Type: Package
+Title: sci-LIANTI Figures
+Version: 0.1.0
+Authors@R: c(
+  person("Yue", "Jiang", email = "yuejiang@alumni.duke.edu", role = c("aut", "cre")),
+  person("Yi", "Yin", email = "yy224@uw.edu", role = "aut"))
+Description: Downstream Utilities and Reproducible Figures of sci-LIANTI Manuscript.
+Depends:
+  HMM,
+  depmixS4,
+  tidyverse
+Imports:
+  assertthat,
+  gridExtra,
+  viridis,
+  dplyr
+Suggests:
+  karyoploteR,
+  ggrepel,
+  scales,
+  BAS,
+  caret,
+  randomForest,
+  corrplot,
+  testthat
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+RoxygenNote: 6.1.1
