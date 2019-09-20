@@ -1,6 +1,6 @@
 # sciliantifig
 
-This is an R package that keeps track of analysis scripts, functions, `Rmarkdown`s and immediate input data for the final figure generation in the sci-LIANTI manuscript ([bioRxiv](https://www.biorxiv.org/content/early/2018/06/12/338053)).
+This is an R package that keeps track of analysis scripts, functions, `Rmarkdown`s and immediate input data for the final figure generation in the sci-LIANTI manuscript ([bioRxiv](https://www.biorxiv.org/content/early/2018/06/12/338053), [published version](https://www.cell.com/molecular-cell/pdfExtended/S1097-2765(19)30618-5)).
 
 # Install
 
